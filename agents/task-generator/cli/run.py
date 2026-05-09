@@ -231,7 +231,20 @@ def main() -> int:
         "--on-failure", args.on_failure,
         "--yes",
     ]
-    return write_cli.main()
+    plane_rc = write_cli.main()
+    if plane_rc != 0 or args.no_grava:
+        return plane_rc
+
+    import grava as grava_cli
+    sys.argv = [
+        "grava.py",
+        "--work-dir", str(work_dir),
+        "--target-repo", str(mapping.repo),
+        "--run-id", run_id,
+        "--on-failure", args.on_failure,
+        "--yes",
+    ]
+    return grava_cli.main()
 
 
 if __name__ == "__main__":

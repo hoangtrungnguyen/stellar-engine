@@ -1,14 +1,14 @@
-# task-generator (Phase 2)
+# task-generator (Phase 3)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
-hierarchy and (with explicit operator approval) creates the work items in
-Plane.
+hierarchy, writes it to Plane (with explicit operator approval), and mirrors
+the same hierarchy to Grava in the target repo.
 
-**Phase 2 = Plane writes are live.** Phases 3 (Grava mirror) and 4
-(reconciler / idempotency) land in subsequent sessions.
+**Phase 3 = Grava mirror is live.** Phase 4 (full reconciler with diffs +
+orphan detection + bidirectional drift) lands in a follow-up session.
 
 See `../../docs/task-generator-strategy-bullets.md` and
-`../../docs/task-generator/` for the full design.
+`../../docs/task-generator/` for the design.
 
 ## Install
 
@@ -21,18 +21,25 @@ follow-up will add them. Run the `pip install` above as a one-time step.
 
 ## Configure
 
-Reuse `~/.config/plane/config.json` from `setup.sh`. Then add a project entry
-to `<repo-root>/repo-map.yaml` with `repo_name` (folder name only — must live
-as a sibling of `stellar-engine/`) and `git_url` (clone source if the folder
-isn't already present locally):
+1. Reuse `~/.config/plane/config.json` from `setup.sh`.
+2. Add a project entry to `<repo-root>/repo-map.yaml` with `repo_name`
+   (folder name only — must live as a sibling of `stellar-engine/`) and
+   `git_url` (clone source if the folder isn't already present locally):
 
-```yaml
-projects:
-  "abc123-...-...":
-    repo_name: sportbuddies
-    git_url: git@github.com:trungnguyenhoang/sportbuddies.git
-    workspace_prefix: SPORT
-```
+   ```yaml
+   projects:
+     "abc123-...-...":
+       repo_name: sportbuddies
+       git_url: git@github.com:trungnguyenhoang/sportbuddies.git
+       workspace_prefix: SPORT
+   ```
+
+3. **For Phase 3 only:** initialise Grava inside the target repo (one-time):
+
+   ```bash
+   cd /Users/trungnguyenhoang/IdeaProjects/sportbuddies
+   grava init
+   ```
 
 If the sibling folder is missing on first run, the agent will clone `git_url`
 for you. Pass `--no-clone` to disable auto-clone.
@@ -46,10 +53,10 @@ python3 agents/task-generator/cli/run.py <project_id> <page_id> --dry-run \
 ```
 
 Output: a master preview path under `<target_repo>/runs/preview/<run_id>/`
-plus one `.epic-NN-*.preview.md` per epic. Hand-review the master + the per-
-epic files before you decide to write.
+plus one `.epic-NN-*.preview.md` per epic. Hand-review before deciding to
+write.
 
-## Promote a previewed plan to actual Plane writes
+## Promote to Plane writes (Phase 2)
 
 Re-use the same work dir from the preview run so the writer doesn't re-fetch:
 
@@ -61,28 +68,74 @@ python3 agents/task-generator/cli/write.py \
     --yes
 ```
 
-Or skip the two-step composition and let `run.py` chain into the writer:
-
-```bash
-python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes
-# Without --yes, run.py prompts for confirmation between preview and write.
-```
-
 Result: Plane has the full hierarchy. A `RunReport` JSON lands at
 `<repo>/runs/reports/<run_id>.json`.
 
-### `--on-failure` modes
+## Mirror to Grava (Phase 3)
 
-- `prompt` (default) — on a Plane API error, ask `Rollback? [y/N/skip]`.
-- `abort` — write a partial-state report and exit 5. Re-run to resume.
-- `rollback` — delete created work items in reverse order; exit 6 if rollback
-  succeeds, else 5.
+After Phase 2 succeeds, mirror the hierarchy into the target repo's Grava DB:
+
+```bash
+python3 agents/task-generator/cli/grava.py \
+    --work-dir <repo>/runs/work/<run_id> \
+    --target-repo <repo> \
+    --run-id <run_id> \
+    --yes
+```
+
+The writer:
+
+1. Searches Grava for `plane:<seq>` labels — if found, **updates** the
+   existing issue (title / description / priority); else **creates** a new
+   issue.
+2. Applies cross-link labels per level:
+   - Epic: `plane:<seq>`
+   - Story: `plane:<seq>` + `plane-epic:<eseq>`
+   - Task: `plane:<seq>` + `plane-story:<sseq>` + `plane-epic:<eseq>`
+3. Embeds Plane URLs in each Grava description (and the spec-page URL on
+   tasks).
+4. Posts `Mirrored to Grava: grava-XXXX` as a comment on each Plane work
+   item (only on first creation; the update path skips comment-back).
+5. Runs `grava commit -m "task-generator: mirror Plane page <page_id>"`.
+
+The same `<repo>/runs/reports/<run_id>.json` from Phase 2 is **extended**
+with `grava_created`, `grava_updated`, `grava_anomalies`, and
+`grava_commit_hash`.
+
+## Single-shot orchestrator
+
+```bash
+# Stops after preview
+python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes --dry-run
+
+# Stops after Plane (skip Grava)
+python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes --no-grava
+
+# Full pipeline: preview → Plane writes → Grava mirror
+python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes
+```
+
+Without `--yes`, `run.py` prompts for confirmation between preview and writes.
 
 ## Resume after a partial failure
 
-Re-run the **same** `cli/write.py` invocation. The writer reads
-`<work_dir>/run_state.json` and skips any op already in
-`completed_op_indices`, picking up at the failed index.
+Re-run the **same** invocation. The writer reads the relevant state file
+(`run_state.json` for Plane, `grava_state.json` for Grava) and skips any
+op already in `completed_op_indices`, picking up at the failed index.
+
+## Re-running against the same Plane page
+
+- **Plane (Phase 2)** has no idempotency in Phase 2. Re-running creates
+  duplicates. Don't.
+- **Grava (Phase 3)** is idempotent via `plane:<seq>` label search. Re-running
+  is safe — Plane state propagates to Grava through the update path.
+
+## `--on-failure` modes
+
+- `prompt` (default) — on a failure, ask `Rollback? [y/N]`.
+- `abort` — write a partial-state report and exit 5. Re-run to resume.
+- `rollback` — Phase 2 deletes Plane work items in reverse order; Phase 3
+  drops Grava issues in reverse order (`grava drop --force`, soft-delete).
 
 ## Step-by-step CLI (useful for debugging)
 
@@ -95,21 +148,24 @@ python3 agents/task-generator/cli/parse.py    --work-dir "$WORK"
 python3 agents/task-generator/cli/render.py   --work-dir "$WORK" --target-repo "$REPO"
 # review the preview, then:
 python3 agents/task-generator/cli/write.py    --work-dir "$WORK" --target-repo "$REPO" --yes
+# then mirror:
+python3 agents/task-generator/cli/grava.py    --work-dir "$WORK" --target-repo "$REPO" --yes
 ```
 
-Intermediate JSON lands at `<repo>/runs/work/<run_id>/{page,preflight,ir,run_state}.json`.
+Intermediate JSON lands at
+`<repo>/runs/work/<run_id>/{page,preflight,ir,run_state,grava_state}.json`.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | configuration error (missing creds, unmapped project, missing page, missing work-dir files) |
+| 1 | configuration error (missing creds, unmapped project, missing files, Plane phase incomplete in Phase 3) |
 | 2 | `--no-clone` and folder missing |
 | 3 | duplicate pages detected (or clone failure in `resolve_repo.py`) |
-| 4 | missing required Plane work-item type (epic/story/task) at write time |
-| 5 | partial Plane write — checkpoint persisted; re-run to resume |
-| 6 | rollback completed — Plane state restored |
+| 4 | missing required Plane work-item type (Phase 2) **or** Grava not initialised (Phase 3) |
+| 5 | partial write — checkpoint persisted; re-run to resume |
+| 6 | rollback completed |
 
 ## Troubleshoot
 
@@ -119,18 +175,24 @@ Intermediate JSON lands at `<repo>/runs/work/<run_id>/{page,preflight,ir,run_sta
 | `RepoMapError: Folder exists but is not a git repo` | Sibling folder is a stale non-git directory | Delete or move the folder, re-run (agent clones fresh) |
 | `RepoMapError: Permission denied (publickey)` | Bad SSH key / missing PAT / wrong `git_url` | Fix git auth or correct `git_url`; re-run |
 | `RepoMapError: missing locally; ... --no-clone` | Sibling folder absent and `--no-clone` passed | Drop `--no-clone`, pre-clone, or pass `--target-repo PATH` |
-| `Cannot write — Plane work-item type(s) missing` | Plane project on free tier | Enable paid tier or create the type, then re-run |
-| Duplicate-page exit (3) | Multiple Plane pages share the target's title | **Resolve in the Plane web UI** (delete/rename — REST API does not support page update/delete), or pass `--allow-duplicate-pages` to bypass |
-| `write.py` exit 5 | One op failed mid-run | Inspect `<repo>/runs/reports/<run_id>.json`; re-run identical command to resume, or pass `--on-failure rollback` |
-| `write.py` exit 6 | Rollback completed | Investigate `failure_detail` in the report before retrying |
-| `ParseWarning(kind="multiple_h2")` in preview | Spec has > 1 H2 (multi-epic mode is on by default — each H2 becomes an epic; this warning is informational) | If unintended, split the spec |
-| Re-run created duplicates in Plane | Phase 2 has no search-based idempotency | Phase 4 reconciler will fix; for now, delete duplicates in Plane UI |
+| `Cannot write — Plane work-item type(s) missing` | Plane project on free tier or types deleted | Create the type(s) in Plane, then re-run |
+| Duplicate-page exit (3) | Multiple Plane pages share the target's title | **Resolve in the Plane web UI** (REST API does not support page update/delete), or pass `--allow-duplicate-pages` |
+| `write.py` exit 5 | One Plane op failed mid-run | Inspect `<repo>/runs/reports/<run_id>.json`; re-run identical command to resume, or pass `--on-failure rollback` |
+| `Plane API 400 ... Invalid HTML passed` | Plane rejects empty `description_html=""` | Already handled — the writer omits the field when empty |
+| `grava.py` exit 1 + "Plane writes incomplete" | Phase 2 left `failed_op_index` set | Re-run `cli/write.py` to resume Plane first; only then re-run grava |
+| `grava.py` exit 4 + "Grava is not initialised" | No `.grava.yaml` in target repo | `cd <target_repo> && grava init`, then re-run grava |
+| `grava.py` exit 5 | One Grava op failed mid-run | Inspect `<work_dir>/grava_state.json`; re-run to resume, or pass `--on-failure rollback` |
+| `report.grava_anomalies` non-empty | Two+ Grava issues share a `plane:<seq>` label | Resolve in Grava (drop one or relabel); re-run |
+| Re-run against same page in Phase 2 created duplicates | Phase 2 has no search-based idempotency | Phase 4 reconciler will fix. For now: don't re-run Phase 2 against an already-written page |
 
 ## Phase status
 
 - **Phase 1:** parser + read-only Plane client + planner + dry-run preview.
-- **Phase 2 (current):** Plane writes (creates / comments / Related-line
-  description updates), checkpoint-based resume, optional rollback.
-- **Phase 3:** Grava mirror in the target repo.
-- **Phase 4:** Reconciler (idempotency by search, field-by-field diffs, orphan
-  detection, type_marker → priority/label mapping).
+- **Phase 2:** Plane writes (creates / comments / Related-line description
+  updates), checkpoint-based resume, optional rollback.
+- **Phase 3 (current):** Grava mirror with three-level subtask nesting,
+  cross-link labels, Plane-URL embedding, comment-back, and label-based
+  reconciliation (re-runs propagate Plane edits to Grava without duplicates).
+- **Phase 4:** Full reconciler — preview-time field-by-field diffs, orphan
+  detection, Plane-side reconciliation, bidirectional drift detection,
+  type_marker → Plane priority/type mapping.

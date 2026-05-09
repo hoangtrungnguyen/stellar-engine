@@ -91,27 +91,83 @@ def test_run_writes_when_yes_passed(monkeypatch, tmp_path, capsys):
     target = _setup_yaml_repo(monkeypatch, tmp_path)
     _setup_fakes(monkeypatch)
 
-    # Capture the write.py invocation instead of actually executing it.
-    captured = {}
-
-    def fake_main():
-        captured["argv"] = list(sys.argv)
-        return 0
+    captured = {"write_argv": None, "grava_argv": None}
 
     import importlib
     write_mod = importlib.import_module("write")
-    monkeypatch.setattr(write_mod, "main", fake_main)
+
+    def fake_write_main():
+        captured["write_argv"] = list(sys.argv)
+        return 0
+
+    monkeypatch.setattr(write_mod, "main", fake_write_main)
+
+    grava_mod = importlib.import_module("grava")
+
+    def fake_grava_main():
+        captured["grava_argv"] = list(sys.argv)
+        return 0
+
+    monkeypatch.setattr(grava_mod, "main", fake_grava_main)
 
     rc, out, err = _run(monkeypatch, capsys, [
         UUID_A, "page-A", "--yes", "--run-id", "run02",
     ])
     assert rc == 0
-    assert captured["argv"][0] == "write.py"
-    assert "--work-dir" in captured["argv"]
-    assert "--target-repo" in captured["argv"]
-    assert "--run-id" in captured["argv"]
-    run_id_idx = captured["argv"].index("--run-id") + 1
-    assert captured["argv"][run_id_idx] == "run02"
+    assert captured["write_argv"][0] == "write.py"
+    run_id_idx = captured["write_argv"].index("--run-id") + 1
+    assert captured["write_argv"][run_id_idx] == "run02"
+    # Grava also fires after a successful write
+    assert captured["grava_argv"] is not None
+    assert captured["grava_argv"][0] == "grava.py"
+
+
+def test_run_no_grava_short_circuits(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    import importlib
+    write_mod = importlib.import_module("write")
+    monkeypatch.setattr(write_mod, "main", lambda: 0)
+
+    grava_mod = importlib.import_module("grava")
+    grava_called = {"yes": False}
+
+    def grava_main():
+        grava_called["yes"] = True
+        return 0
+
+    monkeypatch.setattr(grava_mod, "main", grava_main)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--yes", "--no-grava", "--run-id", "rng",
+    ])
+    assert rc == 0
+    assert grava_called["yes"] is False
+
+
+def test_run_skips_grava_if_plane_failed(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    import importlib
+    write_mod = importlib.import_module("write")
+    monkeypatch.setattr(write_mod, "main", lambda: 5)
+
+    grava_mod = importlib.import_module("grava")
+    grava_called = {"yes": False}
+
+    def grava_main():
+        grava_called["yes"] = True
+        return 0
+
+    monkeypatch.setattr(grava_mod, "main", grava_main)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--yes", "--run-id", "rfail",
+    ])
+    assert rc == 5
+    assert grava_called["yes"] is False
 
 
 def test_run_blocks_writes_when_types_missing(monkeypatch, tmp_path, capsys):

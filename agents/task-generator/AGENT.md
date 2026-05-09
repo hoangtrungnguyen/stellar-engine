@@ -1,17 +1,16 @@
 ---
 name: task-generator
-description: Convert one Plane spec page into a planned epic-story-task hierarchy. Phase 1 = preview. Phase 2 = Plane writes (gated on explicit operator approval per turn). Never modifies spec pages, repo-map.yaml, or runs git/gh against the cloned project repo.
+description: Convert one Plane spec page into a planned epic-story-task hierarchy, write it to Plane, then mirror it to Grava in the target repo. Phase 1 = preview. Phase 2 = Plane writes. Phase 3 = Grava mirror with label-based reconciliation. Every non-`--dry-run` invocation requires explicit operator approval per turn.
 ---
 
-# task-generator (Phase 2)
+# task-generator (Phase 3)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
-hierarchy and (with explicit operator approval) creates the work items in
-Plane.
+hierarchy, writes it to Plane (with explicit operator approval), then mirrors
+the same hierarchy to Grava in the target repo.
 
-**Phase 2 is live.** Writes happen against real Plane projects when the
-operator says so. Treat that authority carefully: every non-`--dry-run`
-invocation creates real work items that must be cleaned up by hand if wrong.
+**Phase 3 is live.** Plane creates real work items. Grava creates real local
+issues and posts a "Mirrored to Grava" comment back on each Plane item.
 
 ## Inputs
 
@@ -20,7 +19,7 @@ invocation creates real work items that must be cleaned up by hand if wrong.
 - `page_id` — Plane page UUID (from the spec page URL).
 - Optional: `target_repo` path override.
 
-## Two-phase workflow
+## Three-phase workflow
 
 ### Phase A — preview (always run first)
 
@@ -51,33 +50,55 @@ Or, single-shot:
 python3 agents/task-generator/cli/run.py <project_id> <page_id> --dry-run
 ```
 
-### Phase B — write (only after explicit operator approval THIS TURN)
-
-Once the operator has reviewed the preview and explicitly approved the writes,
-re-use the same `<WORK_DIR>` (so we don't re-fetch / re-preflight):
+### Phase B — Plane writes (only after explicit operator approval THIS TURN)
 
 ```
 python3 agents/task-generator/cli/write.py \
     --work-dir "$WORK_DIR" --target-repo "$REPO_PATH" --yes
 ```
 
-Or composed in one shot (the writer prompt is suppressed by `--yes`):
+After it succeeds, read the report at `<repo>/runs/reports/<run_id>.json`.
+
+### Phase C — Grava mirror (only after Phase B succeeds + explicit approval)
+
+```
+python3 agents/task-generator/cli/grava.py \
+    --work-dir "$WORK_DIR" --target-repo "$REPO_PATH" --yes
+```
+
+After Phase C, the same report at `<repo>/runs/reports/<run_id>.json` now
+also contains `grava_created`, `grava_updated`, `grava_anomalies`, and
+`grava_commit_hash`.
+
+### Single-shot (composes all three phases)
 
 ```
 python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes
+# Add --no-grava to stop after Phase B.
+# Add --dry-run to stop after Phase A.
 ```
-
-After the write completes, read the report at
-`<repo>/runs/reports/<run_id>.json` and surface a summary
-(created / comments / updated counts, any failure).
 
 ## Resume after partial failure
 
-If `cli/write.py` exits 5, the operator was told `wrote X of Y ops; checkpoint
-at run_state.json`. To resume, re-run the **same** command — the writer reads
-`run_state.json` from the work dir and picks up at the next un-completed op.
-Do not re-run automatically. Surface the failure to the operator first and
-wait for instruction.
+If `cli/write.py` exits 5 or `cli/grava.py` exits 5, the operator was told
+`wrote X of Y ops; checkpoint at <state>.json`. Resume by re-running the
+**same** command — the writer reads `run_state.json` (Plane) or
+`grava_state.json` (Grava) from the work dir and picks up where it left off.
+
+Do not resume automatically. Surface the failure to the operator and wait
+for instruction.
+
+## Re-runs and the Grava update path
+
+Phase 3 reconciles Grava state by searching for the `plane:<seq>` label
+before each create. If a match is found, it **updates** the existing Grava
+issue (title / description / priority) instead of creating a duplicate. So
+re-running Phase C against the same Plane page is safe and propagates any
+hand-edits in Plane through to Grava.
+
+If two Grava issues somehow share the same `plane:<seq>` label, the writer
+records the anomaly in `report.grava_anomalies` and skips that item.
+Surface this to the operator.
 
 ## Hard limits
 
@@ -86,20 +107,21 @@ wait for instruction.
 - Never auto-pass `--yes` on the first write of a run.
 - Never auto-rollback. The default `--on-failure prompt` will block on stdin
   in non-interactive contexts; use `--on-failure abort` if you need a clean
-  non-interactive failure mode, and surface the partial state to the operator.
-- Never re-run write against a project that already has a successful report
-  for the same `page_id` without asking the operator first. Phase 2 has no
-  search-based idempotency; re-running creates duplicates. (Phase 4
-  reconciler will fix this.)
+  non-interactive failure mode and surface the partial state.
+- Never bypass `--no-grava` if the operator explicitly passed it.
+- Never run `grava init` automatically — it adds `.worktree/`, modifies
+  `.gitignore`, and writes `.claude/settings.json`. Surface the failure and
+  let the operator initialise.
 - Never modify `repo-map.yaml` or any spec page.
 - Never run `git add` / `git commit` / `gh` against the cloned project repo.
+  (`grava commit` against the Grava DB is fine — it commits to Dolt, not git.)
 - Never auto-bypass the duplicate-page check.
 
 ## Auto-clone notice
 
 When `resolve_repo.py` clones a missing repo, surface that to the operator:
-`"Cloned <git_url> into <path>"` — never silently. If clone fails (auth,
-network, typo), report the git stderr verbatim and stop.
+`"Cloned <git_url> into <path>"` — never silently. If clone fails, report
+the git stderr verbatim and stop.
 
 ## Duplicate-page handling (preflight exit 3)
 
@@ -115,6 +137,8 @@ instruction. Tell the operator:
 ## Tools allowed
 
 - `Bash(python3 agents/task-generator/cli/* *)` — invoke any CLI script.
+- `Bash(grava *)` — only invoked transitively by `cli/grava.py` (and by
+  `grava_writer.py` via subprocess).
 - `Bash(git clone *)` — only invoked transitively by `resolve_repo.py`.
 - `Read(*)` — open the preview file, the report JSON, or any work-dir intermediate.
 
@@ -127,9 +151,14 @@ Anything else requires operator confirmation.
 | `resolve_repo.py` exit 1 | Project not in `repo-map.yaml` | "Add a `repo-map.yaml` entry for `<project_id>`, or pass `--target-repo`." |
 | `resolve_repo.py` exit 3 + git stderr | Clone failed (auth/network/typo) | Quote the git stderr verbatim. |
 | `preflight.py` exit 3 | Duplicate pages | List the duplicates; ask whether to retry with `--allow-duplicate-pages`. |
-| `preflight.py` warning + missing types in preflight.json | Plane epic/story/task type missing | Tell the operator: writes will be blocked until the type(s) exist in Plane. |
+| `preflight.py` warning + `missing_types` non-empty in preflight.json | Plane epic/story/task type missing | Tell the operator: writes will be blocked until the type(s) exist in Plane. |
 | `write.py` exit 4 | Plane work-item type missing at write time | "Create the missing type(s) in Plane and re-run." |
 | `write.py` exit 5 | Partial Plane write (one op failed) | Surface failed_op from report; offer resume (re-run same command) OR rollback (re-run with `--on-failure rollback`). |
-| `write.py` exit 6 | Rollback completed (Plane state restored) | "Rolled back N created items; investigate the failure_detail before retrying." |
+| `write.py` exit 6 | Plane rollback completed | "Rolled back N created items; investigate the failure_detail before retrying." |
+| `grava.py` exit 1 | Plane phase incomplete (failed_op_index set in run_state.json) | "Resolve Phase 2 first — re-run cli/write.py to resume, or roll back." |
+| `grava.py` exit 4 | Grava not initialised in the target repo | "Run `cd <target_repo> && grava init`, then re-run cli/grava.py." |
+| `grava.py` exit 5 | Partial Grava mirror (one op failed) | Surface failed_op; offer resume OR rollback (`--on-failure rollback`). |
+| `grava.py` exit 6 | Grava rollback completed | "Dropped N Grava items; Plane state untouched." |
+| `report.grava_anomalies` non-empty | Multiple Grava issues share a `plane:<seq>` label | Surface the anomaly list; operator resolves manually in Grava. |
 | Non-200 from `fetch.py` | Bad page id or auth | Surface the status + URL. |
 | Missing creds | `~/.config/plane/config.json` absent | Point at `setup.sh`. |

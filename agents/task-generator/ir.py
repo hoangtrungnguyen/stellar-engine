@@ -96,7 +96,10 @@ class RunReport:
     plane_comments: list[dict] = field(default_factory=list)
     plane_orphans: list[dict] = field(default_factory=list)
     grava_created: list[dict] = field(default_factory=list)
+    grava_updated: list[dict] = field(default_factory=list)
+    grava_anomalies: list[dict] = field(default_factory=list)
     grava_orphans: list[dict] = field(default_factory=list)
+    grava_commit_hash: str | None = None
     started_at: str = ""
     finished_at: str = ""
     spec_page_id: str = ""
@@ -118,3 +121,18 @@ class RunState:
     failed_op_index: int | None = None
     failure_detail: str | None = None
     rolled_back: bool = False
+
+
+@dataclass
+class GravaState:
+    run_id: str
+    target_repo: str
+    started_at: str
+    ops_total: int
+    completed_op_indices: list[int] = field(default_factory=list)
+    ref_to_grava_id: dict[str, str] = field(default_factory=dict)
+    plane_comments_posted: list[str] = field(default_factory=list)
+    failed_op_index: int | None = None
+    failure_detail: str | None = None
+    rolled_back: bool = False
+    grava_commit_hash: str | None = None

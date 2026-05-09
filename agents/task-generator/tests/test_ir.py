@@ -10,6 +10,7 @@ from ir import (  # noqa: E402
     CreateLabel,
     CreateWorkItem,
     EpicNode,
+    GravaState,
     ParseWarning,
     RunPlan,
     RunReport,
@@ -77,3 +78,17 @@ def test_dataclasses_construct():
     assert state.completed_op_indices == []
     assert state.ref_to_uuid == {}
     assert state.failed_op_index is None
+
+    g = GravaState(
+        run_id="r1",
+        target_repo="/tmp/repo",
+        started_at="2026-05-09T12:00:00Z",
+        ops_total=5,
+    )
+    assert g.ref_to_grava_id == {}
+    assert g.plane_comments_posted == []
+    assert g.grava_commit_hash is None
+
+    assert report.grava_updated == []
+    assert report.grava_anomalies == []
+    assert report.grava_commit_hash is None
