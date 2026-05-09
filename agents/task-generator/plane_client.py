@@ -10,6 +10,7 @@ from pathlib import Path
 import requests
 
 CONFIG_PATH = Path.home() / ".config" / "plane" / "config.json"
+DEFAULT_TIMEOUT_SECONDS = 30
 
 
 class PlaneClientError(Exception):
@@ -61,6 +62,7 @@ class PlaneClient:
 
     def _request(self, method: str, path: str, **kwargs) -> dict | list:
         url = self._url(path)
+        kwargs.setdefault("timeout", DEFAULT_TIMEOUT_SECONDS)
         for attempt in range(5):
             resp = self._session.request(method, url, **kwargs)
             if resp.status_code == 429:

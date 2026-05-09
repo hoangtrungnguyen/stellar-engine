@@ -210,6 +210,31 @@ def execute(
     completed = set(state.completed_op_indices)
     create_order: list[tuple[int, str, str]] = []  # (idx, ref_key, grava_id) — for rollback
 
+    # Reseed report.grava_created from state so resume runs don't lose prior
+    # creates. The previous run may have crashed before writing the report.
+    if state.ref_to_grava_id and not report.grava_created:
+        for idx in sorted(completed):
+            if idx >= len(plan.plane_ops):
+                continue
+            op = plan.plane_ops[idx]
+            if not isinstance(op, CreateWorkItem):
+                continue
+            grava_id = state.ref_to_grava_id.get(op.ref_key)
+            if not grava_id:
+                continue
+            seq = plane_state.ref_to_sequence_id.get(op.ref_key)
+            plane_uuid = plane_state.ref_to_uuid.get(op.ref_key)
+            report.grava_created.append({
+                "op_index": idx,
+                "ref_key": op.ref_key,
+                "grava_id": grava_id,
+                "node_kind": op.node_kind,
+                "plane_uuid": plane_uuid,
+                "plane_seq_id": seq,
+                "priority": None,
+                "from_state": True,
+            })
+
     for idx in sorted(completed):
         if idx >= len(plan.plane_ops):
             continue
@@ -270,7 +295,12 @@ def execute(
             commit_hash = commit_resp.get("hash") if isinstance(commit_resp, dict) else None
         except RuntimeError as exc:
             commit_hash = None
-            print(f"[grava_writer] commit failed (non-fatal): {exc}", file=sys.stderr)
+            # Grava auto-commits per command, so the trailing commit is often a
+            # no-op ("nothing to commit"). Treat that as success.
+            if "nothing to commit" in str(exc).lower():
+                print("[grava_writer] commit: nothing to commit (Grava auto-commits per op).", file=sys.stderr)
+            else:
+                print(f"[grava_writer] commit failed (non-fatal): {exc}", file=sys.stderr)
 
         state.grava_commit_hash = commit_hash
         report.grava_commit_hash = commit_hash

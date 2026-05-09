@@ -135,6 +135,19 @@ def test_create_label_default_color(monkeypatch):
     assert recorded[0]["kwargs"]["json"] == {"name": "Bug", "color": "#888"}
 
 
+def test_request_passes_default_timeout(monkeypatch):
+    """Without a timeout, a hung Plane connection blocks the writer indefinitely."""
+    client, recorded = _client_with_recorder(monkeypatch, [(200, {"ok": True})])
+    client.get_page("proj", "page")
+    assert recorded[0]["kwargs"]["timeout"] == 30
+
+
+def test_request_caller_can_override_timeout(monkeypatch):
+    client, recorded = _client_with_recorder(monkeypatch, [(200, {})])
+    client._request("GET", "projects/proj/pages/", timeout=5)
+    assert recorded[0]["kwargs"]["timeout"] == 5
+
+
 @pytest.mark.skipif(
     not os.environ.get("RUN_PLANE_INTEGRATION"),
     reason="Requires RUN_PLANE_INTEGRATION=1 + live Plane creds",
