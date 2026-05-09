@@ -1,0 +1,101 @@
+"""IR + plan + report dataclasses for the task-generator agent."""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, Union
+
+
+@dataclass
+class TaskNode:
+    title: str
+    description_md: str
+    type_marker: str | None = None
+    related_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StoryNode:
+    title: str
+    description_md: str
+    type_marker: str | None = None
+    tasks: list[TaskNode] = field(default_factory=list)
+    related_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EpicNode:
+    title: str
+    description_md: str
+    spec_page_url: str
+    spec_page_id: str
+    open_questions: list[str] = field(default_factory=list)
+    risks: list[str] = field(default_factory=list)
+    stories: list[StoryNode] = field(default_factory=list)
+    related_refs: list[str] = field(default_factory=list)
+
+
+ParseWarningKind = Literal[
+    "orphan_story",
+    "multiple_h2",
+    "unknown_section",
+    "no_h2",
+    "fenced_code_heading",
+]
+
+
+@dataclass
+class ParseWarning:
+    kind: ParseWarningKind
+    detail: str
+
+
+@dataclass
+class CreateWorkItem:
+    node_kind: Literal["epic", "story", "task"]
+    title: str
+    description_html: str
+    type_id_key: Literal["epic", "story", "task"]
+    parent_ref: str | None
+    ref_key: str
+    label_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AddComment:
+    target_ref_key: str
+    comment_html: str
+
+
+@dataclass
+class UpdateWorkItem:
+    target_ref_key: str
+    patch: dict
+
+
+@dataclass
+class CreateLabel:
+    name: str
+    color: str = "#888"
+
+
+Op = Union[CreateWorkItem, AddComment, UpdateWorkItem, CreateLabel]
+
+
+@dataclass
+class RunPlan:
+    plane_ops: list[Op]
+    grava_ops: list[Op]
+    preview_path: Path
+    warnings: list[ParseWarning]
+
+
+@dataclass
+class RunReport:
+    plane_created: list[dict] = field(default_factory=list)
+    plane_updated: list[dict] = field(default_factory=list)
+    plane_orphans: list[dict] = field(default_factory=list)
+    grava_created: list[dict] = field(default_factory=list)
+    grava_orphans: list[dict] = field(default_factory=list)
+    started_at: str = ""
+    finished_at: str = ""
+    spec_page_id: str = ""

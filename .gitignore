@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# task-generator runtime artifacts (live in target repos, not here)
+runs/
+
+# Local Plane sync state
+.plane-pages.json
+
+# Claude local settings
+.claude/settings.local.json
