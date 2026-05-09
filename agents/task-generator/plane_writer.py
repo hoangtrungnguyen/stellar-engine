@@ -139,9 +139,10 @@ def _dispatch(
             )
         payload = {
             "name": op.title,
-            "description_html": op.description_html,
             "type_id": type_id,
         }
+        if op.description_html:
+            payload["description_html"] = op.description_html
         if op.parent_ref:
             parent_uuid = state.ref_to_uuid.get(op.parent_ref)
             if not parent_uuid:

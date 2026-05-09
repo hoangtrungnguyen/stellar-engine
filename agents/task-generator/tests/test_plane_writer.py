@@ -322,6 +322,43 @@ def test_execute_missing_type_raises_helpful_error(tmp_path):
     assert "epic" in report.failed_op["detail"]
 
 
+def test_create_omits_empty_description_html(tmp_path):
+    """Plane rejects description_html='' with 'Invalid HTML passed' — omit it instead."""
+    op = CreateWorkItem(
+        node_kind="task", title="t", description_html="",
+        type_id_key="task", parent_ref=None, ref_key="task:0",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+    )
+    create_call = next(c for c in client.calls if c[0] == "create")
+    assert "description_html" not in create_call[2]
+
+
+def test_create_includes_description_html_when_present(tmp_path):
+    op = CreateWorkItem(
+        node_kind="task", title="t", description_html="<p>hello</p>",
+        type_id_key="task", parent_ref=None, ref_key="task:0",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+    )
+    create_call = next(c for c in client.calls if c[0] == "create")
+    assert create_call[2]["description_html"] == "<p>hello</p>"
+
+
 def test_load_state_returns_none_when_missing(tmp_path):
     assert plane_writer.load_state(tmp_path / "absent.json") is None
 
