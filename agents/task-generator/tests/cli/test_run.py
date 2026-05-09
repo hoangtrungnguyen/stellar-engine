@@ -87,14 +87,63 @@ def test_run_dry_run_end_to_end(monkeypatch, tmp_path, capsys):
     assert any(preview_dir.glob("*.epic-*.preview.md"))
 
 
-def test_run_writer_guard_exits_2(monkeypatch, tmp_path, capsys):
+def test_run_writes_when_yes_passed(monkeypatch, tmp_path, capsys):
     target = _setup_yaml_repo(monkeypatch, tmp_path)
     _setup_fakes(monkeypatch)
+
+    # Capture the write.py invocation instead of actually executing it.
+    captured = {}
+
+    def fake_main():
+        captured["argv"] = list(sys.argv)
+        return 0
+
+    import importlib
+    write_mod = importlib.import_module("write")
+    monkeypatch.setattr(write_mod, "main", fake_main)
+
     rc, out, err = _run(monkeypatch, capsys, [
         UUID_A, "page-A", "--yes", "--run-id", "run02",
     ])
-    assert rc == 2
-    assert "Phase 2" in err
+    assert rc == 0
+    assert captured["argv"][0] == "write.py"
+    assert "--work-dir" in captured["argv"]
+    assert "--target-repo" in captured["argv"]
+    assert "--run-id" in captured["argv"]
+    run_id_idx = captured["argv"].index("--run-id") + 1
+    assert captured["argv"][run_id_idx] == "run02"
+
+
+def test_run_blocks_writes_when_types_missing(monkeypatch, tmp_path, capsys):
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+
+    class NoTypesClient(FakeClient):
+        def list_work_item_types(self, project_id):
+            return []  # epic/story/task all missing
+
+    monkeypatch.setattr(run_cli, "PlaneClient", NoTypesClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--yes", "--run-id", "run-no-types",
+    ])
+    assert rc == 4
+    assert "missing" in err
+    assert "epic" in err
+
+
+def test_run_propagates_write_exit_code(monkeypatch, tmp_path, capsys):
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    import importlib
+    write_mod = importlib.import_module("write")
+    monkeypatch.setattr(write_mod, "main", lambda: 5)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--yes", "--run-id", "run-fail",
+    ])
+    assert rc == 5
 
 
 def test_run_target_repo_override(monkeypatch, tmp_path, capsys):

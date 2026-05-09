@@ -13,6 +13,7 @@ from ir import (  # noqa: E402
     ParseWarning,
     RunPlan,
     RunReport,
+    RunState,
     StoryNode,
     TaskNode,
     UpdateWorkItem,
@@ -62,3 +63,17 @@ def test_dataclasses_construct():
     report = RunReport(spec_page_id="abc")
     assert report.spec_page_id == "abc"
     assert report.plane_created == []
+    assert report.plane_comments == []
+    assert report.failed_op is None
+    assert report.rolled_back is False
+
+    state = RunState(
+        run_id="r1",
+        project_id="p",
+        page_id="pg",
+        started_at="2026-05-09T12:00:00Z",
+        ops_total=10,
+    )
+    assert state.completed_op_indices == []
+    assert state.ref_to_uuid == {}
+    assert state.failed_op_index is None

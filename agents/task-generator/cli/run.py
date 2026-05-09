@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""taskgen-run: end-to-end orchestrator (Phase 1 = dry-run only)."""
+"""taskgen-run: end-to-end orchestrator.
+
+Default flow: preview the plan, ask for confirmation, then invoke cli/write.py
+to execute against Plane (Phase 2). `--dry-run` short-circuits after the preview.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import plane_writer  # noqa: E402
 from parser import html_to_markdown, parse  # noqa: E402
 from plane_client import PlaneClient, PlaneClientError, load_credentials  # noqa: E402
 from planner import (  # noqa: E402
@@ -28,7 +31,7 @@ from repo_map import RepoMapError, lookup_project  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="task-generator: end-to-end dry-run orchestrator (Phase 1)."
+        description="task-generator: end-to-end orchestrator (preview + Phase-2 writes)."
     )
     ap.add_argument("project_id")
     ap.add_argument("page_id")
@@ -36,9 +39,11 @@ def main() -> int:
     ap.add_argument("--no-clone", action="store_true")
     ap.add_argument("--allow-duplicate-pages", action="store_true")
     ap.add_argument("--dry-run", action="store_true",
-                    help="Preview-only mode (Phase 1 supports nothing else).")
+                    help="Preview only — skip Plane writes.")
     ap.add_argument("--no-grava", action="store_true", help="Skip Phase 3 Grava writes.")
     ap.add_argument("--yes", action="store_true", help="Skip interactive confirmation.")
+    ap.add_argument("--on-failure", choices=["prompt", "rollback", "abort"], default="prompt",
+                    help="Behaviour when a Plane op fails (Phase 2 writes).")
     ap.add_argument("--json-report", type=Path, default=None,
                     help="Override the default JSON report path.")
     ap.add_argument("--run-id", default=None)
@@ -197,22 +202,36 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # Phase 1: refuse to proceed past dry-run.
+    if missing:
+        print(
+            f"Cannot write — Plane work-item type(s) missing: {', '.join(missing)}. "
+            f"Create them in Plane first.",
+            file=sys.stderr,
+        )
+        return 4
+
     if not args.yes:
         try:
-            answer = input("Proceed with Plane writes? [y/N] ").strip().lower()
+            answer = input(
+                f"Proceed with Plane writes ({len(epics)} epics, "
+                f"{len(rp.plane_ops)} ops)? [y/N] "
+            ).strip().lower()
         except EOFError:
             answer = ""
         if answer != "y":
             print("Aborted (no writes performed).", file=sys.stderr)
             return 0
 
-    try:
-        plane_writer.execute(rp, client, None)
-    except NotImplementedError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-    return 0
+    import write as write_cli
+    sys.argv = [
+        "write.py",
+        "--work-dir", str(work_dir),
+        "--target-repo", str(mapping.repo),
+        "--run-id", run_id,
+        "--on-failure", args.on_failure,
+        "--yes",
+    ]
+    return write_cli.main()
 
 
 if __name__ == "__main__":

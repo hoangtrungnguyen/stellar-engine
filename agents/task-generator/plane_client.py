@@ -104,9 +104,41 @@ class PlaneClient:
             return data
         return data.get("results", [])
 
+    def create_work_item(self, project_id: str, payload: dict) -> dict:
+        return self._request(
+            "POST",
+            f"projects/{project_id}/work-items/",
+            json=payload,
+        )
+
+    def update_work_item(self, project_id: str, issue_id: str, payload: dict) -> dict:
+        return self._request(
+            "PATCH",
+            f"projects/{project_id}/work-items/{issue_id}/",
+            json=payload,
+        )
+
+    def delete_work_item(self, project_id: str, issue_id: str) -> None:
+        self._request("DELETE", f"projects/{project_id}/work-items/{issue_id}/")
+
+    # ── Comments ─────────────────────────────────────
+    def add_comment(self, project_id: str, issue_id: str, comment_html: str) -> dict:
+        return self._request(
+            "POST",
+            f"projects/{project_id}/work-items/{issue_id}/comments/",
+            json={"comment_html": comment_html},
+        )
+
     # ── Labels ───────────────────────────────────────
     def list_labels(self, project_id: str) -> list[dict]:
         data = self._request("GET", f"projects/{project_id}/labels/")
         if isinstance(data, list):
             return data
         return data.get("results", [])
+
+    def create_label(self, project_id: str, name: str, color: str = "#888") -> dict:
+        return self._request(
+            "POST",
+            f"projects/{project_id}/labels/",
+            json={"name": name, "color": color},
+        )
