@@ -1,22 +1,27 @@
 # Plane project UUID -> sibling repo mapping for the task-generator agent.
 #
+# Two sources are merged at runtime:
+#   1. This root file (legacy / shared overrides)
+#   2. `systems/<Name>/system.yaml` (per-system config — preferred)
+#
+# Per-system files win on conflict. Add new mappings under `systems/<Name>/`
+# rather than here whenever possible — keeps each system's spec docs, agent
+# config, and Plane wiring co-located. See `systems/SportBuddies/system.yaml`
+# for an example.
+#
 # Each project's repo MUST live as a sibling of stellar-engine/, e.g.:
 #   /Users/you/IdeaProjects/stellar-engine
-#   /Users/you/IdeaProjects/sportbuddies   <- this folder
+#   /Users/you/IdeaProjects/sport-buddies-web   <- this folder
 #
 # If the sibling folder is missing, the agent will `git clone` git_url into it.
 # Use --no-clone to disable auto-clone.
 #
-# Example:
+# Example (commented out — prefer copying into systems/<Name>/system.yaml):
 #
 # projects:
 #   "00000000-0000-0000-0000-000000000000":
-#     repo_name: sportbuddies
-#     git_url: git@github.com:trungnguyenhoang/sportbuddies.git
-#     workspace_prefix: SPORT
+#     repo_name: my-repo
+#     git_url: git@github.com:owner/my-repo.git
+#     workspace_prefix: PREFIX
 
-projects:
-  "8af0f117-1dd0-4bfe-8db8-ff131d865534":
-    repo_name: sport-buddies-web
-    git_url: https://github.com/hoangtrungnguyen/sport-buddies-web.git
-    workspace_prefix: WEBINTRO
+projects: {}

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import repo_map  # noqa: E402
 from repo_map import (  # noqa: E402
     RepoMapError,
+    discover_system_configs,
     load_repo_map,
     lookup_project,
     stellar_engine_parent,
@@ -27,7 +28,9 @@ def _write_map(tmp_path: Path, projects: dict) -> Path:
     return p
 
 
-def test_load_repo_map_basic(tmp_path):
+def test_load_repo_map_basic(tmp_path, monkeypatch):
+    # Isolate from real systems/ directory.
+    monkeypatch.setattr(repo_map, "SYSTEMS_DIR", tmp_path / "no-systems")
     path = _write_map(tmp_path, {
         UUID_A: {"repo_name": "alpha", "git_url": "git@x:a.git", "workspace_prefix": "A"},
     })
@@ -37,7 +40,49 @@ def test_load_repo_map_basic(tmp_path):
     assert entries[UUID_A].workspace_prefix == "A"
 
 
-def test_load_repo_map_missing_file(tmp_path):
+def test_discover_system_configs_walks_systems_dir(tmp_path):
+    sys_dir = tmp_path / "systems"
+    (sys_dir / "Alpha").mkdir(parents=True)
+    (sys_dir / "Alpha" / "system.yaml").write_text(yaml.safe_dump({
+        "projects": {
+            UUID_A: {"repo_name": "alpha", "git_url": "git@x:a.git", "workspace_prefix": "A"},
+        }
+    }))
+    (sys_dir / "Beta").mkdir()
+    (sys_dir / "Beta" / "system.yaml").write_text(yaml.safe_dump({
+        "projects": {
+            UUID_B: {"repo_name": "beta", "git_url": "git@x:b.git", "workspace_prefix": "B"},
+        }
+    }))
+    # A folder without system.yaml is skipped silently.
+    (sys_dir / "NoConfig").mkdir()
+
+    entries = discover_system_configs(sys_dir)
+    assert set(entries.keys()) == {UUID_A, UUID_B}
+    assert entries[UUID_A].repo_name == "alpha"
+    assert entries[UUID_B].repo_name == "beta"
+
+
+def test_system_config_overrides_root(tmp_path, monkeypatch):
+    """Per-system entries win over the root file on conflict."""
+    sys_dir = tmp_path / "systems"
+    (sys_dir / "Alpha").mkdir(parents=True)
+    (sys_dir / "Alpha" / "system.yaml").write_text(yaml.safe_dump({
+        "projects": {
+            UUID_A: {"repo_name": "alpha-from-system", "git_url": "git@x:s.git", "workspace_prefix": "S"},
+        }
+    }))
+    monkeypatch.setattr(repo_map, "SYSTEMS_DIR", sys_dir)
+    root = _write_map(tmp_path, {
+        UUID_A: {"repo_name": "alpha-from-root", "git_url": "git@x:r.git", "workspace_prefix": "R"},
+    })
+    entries = load_repo_map(root)
+    assert entries[UUID_A].repo_name == "alpha-from-system"
+    assert entries[UUID_A].workspace_prefix == "S"
+
+
+def test_load_repo_map_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(repo_map, "SYSTEMS_DIR", tmp_path / "no-systems")
     entries = load_repo_map(tmp_path / "absent.yaml")
     assert entries == {}
 

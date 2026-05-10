@@ -28,22 +28,26 @@ follow-up will add them. Run the `pip install` above as a one-time step.
 ## Configure
 
 1. Reuse `~/.config/plane/config.json` from `setup.sh`.
-2. Add a project entry to `<repo-root>/repo-map.yaml` with `repo_name`
-   (folder name only — must live as a sibling of `stellar-engine/`) and
-   `git_url` (clone source if the folder isn't already present locally):
+2. Add a project entry to **`systems/<Name>/system.yaml`** (preferred) so the
+   per-system spec, agent config, and Plane wiring stay co-located:
 
    ```yaml
+   # systems/SportBuddies/system.yaml
    projects:
-     "abc123-...-...":
-       repo_name: sportbuddies
-       git_url: git@github.com:trungnguyenhoang/sportbuddies.git
-       workspace_prefix: SPORT
+     "8af0f117-1dd0-4bfe-8db8-ff131d865534":
+       repo_name: sport-buddies-web
+       git_url: https://github.com/hoangtrungnguyen/sport-buddies-web.git
+       workspace_prefix: WEBINTRO
    ```
+
+   The agent merges every `systems/*/system.yaml` on top of root
+   `repo-map.yaml` at runtime; per-system entries win on conflict. Use the
+   root file only for shared overrides or temporary mappings.
 
 3. **For Phase 3 only:** initialise Grava inside the target repo (one-time):
 
    ```bash
-   cd /Users/trungnguyenhoang/IdeaProjects/sportbuddies
+   cd /Users/trungnguyenhoang/IdeaProjects/sport-buddies-web
    grava init
    ```
 

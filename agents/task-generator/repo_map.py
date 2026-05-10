@@ -10,6 +10,11 @@ import yaml
 
 DEFAULT_MAPPING_PATH = Path(__file__).resolve().parent.parent.parent / "repo-map.yaml"
 
+# Per-system config layout: each `systems/<Name>/system.yaml` holds one or
+# more `projects:` entries that get merged on top of the root mapping.
+SYSTEMS_DIR = Path(__file__).resolve().parent.parent.parent / "systems"
+SYSTEM_CONFIG_FILENAME = "system.yaml"
+
 
 class RepoMapError(Exception):
     pass
@@ -34,11 +39,10 @@ def stellar_engine_parent() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
-def load_repo_map(path: Path | None = None) -> dict[str, RepoMapEntry]:
-    mapping_path = path or DEFAULT_MAPPING_PATH
-    if not mapping_path.exists():
+def _entries_from_yaml(yaml_path: Path) -> dict[str, RepoMapEntry]:
+    if not yaml_path.exists():
         return {}
-    raw = yaml.safe_load(mapping_path.read_text()) or {}
+    raw = yaml.safe_load(yaml_path.read_text()) or {}
     projects = raw.get("projects", {}) or {}
     out: dict[str, RepoMapEntry] = {}
     for project_id, entry in projects.items():
@@ -49,6 +53,38 @@ def load_repo_map(path: Path | None = None) -> dict[str, RepoMapEntry]:
             git_url=str(entry.get("git_url", "")),
             workspace_prefix=str(entry.get("workspace_prefix", "STELLAR")),
         )
+    return out
+
+
+def discover_system_configs(systems_dir: Path | None = None) -> dict[str, RepoMapEntry]:
+    """Walk `systems/*/system.yaml` and merge their `projects:` entries.
+
+    Per-system entries override root `repo-map.yaml` entries on conflict.
+    """
+    base = systems_dir or SYSTEMS_DIR
+    if not base.exists():
+        return {}
+    out: dict[str, RepoMapEntry] = {}
+    for child in sorted(base.iterdir()):
+        if not child.is_dir():
+            continue
+        cfg = child / SYSTEM_CONFIG_FILENAME
+        if not cfg.exists():
+            continue
+        out.update(_entries_from_yaml(cfg))
+    return out
+
+
+def load_repo_map(path: Path | None = None) -> dict[str, RepoMapEntry]:
+    """Load merged Plane project → repo mapping.
+
+    Sources, in order (later wins on conflict):
+      1. Root `repo-map.yaml` (or `path` override)
+      2. Each `systems/<Name>/system.yaml`
+    """
+    mapping_path = path or DEFAULT_MAPPING_PATH
+    out = _entries_from_yaml(mapping_path)
+    out.update(discover_system_configs())
     return out
 
 
