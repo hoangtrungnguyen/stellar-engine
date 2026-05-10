@@ -31,13 +31,20 @@ def test_simple_epic():
     assert [t.title for t in epic.stories[1].tasks] == ["Clear session", "Redirect to home"]
 
 
-def test_orphan_h3_warns():
+def test_orphan_h3_synthesizes_implicit_epic():
+    """H3 before any H2 used to drop as orphan; now lands under an implicit
+    epic synthesized from the page H1."""
     epics, warnings = parse(_load("02_orphan_h3.md"), "https://x", "abc")
     kinds = [w.kind for w in warnings]
-    assert "orphan_story" in kinds
     assert "no_h2" in kinds
-    orphan = next(w for w in warnings if w.kind == "orphan_story")
-    assert "Orphan Story" in orphan.detail
+    assert "orphan_story" not in kinds
+    assert len(epics) == 1
+    epic = epics[0]
+    assert epic.title == "Page Title"
+    assert len(epic.stories) == 1
+    story = epic.stories[0]
+    assert story.title == "Orphan Story"
+    assert [t.title for t in story.tasks] == ["task one", "task two"]
 
 
 def test_out_of_scope_skipped():

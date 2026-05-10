@@ -163,10 +163,22 @@ def parse(
             if level == 3:
                 flush()
                 if epic is None:
-                    warnings.append(ParseWarning(kind="orphan_story", detail=text))
-                    current_story = None
-                    pending_target = None
-                    continue
+                    # No H2 yet — synthesize an implicit epic from the page
+                    # title so H3s aren't dropped. Common in specs that use
+                    # H3 as the top story tier and skip the H2 layer entirely.
+                    if not any(w.kind == "no_h2" for w in warnings):
+                        warnings.append(ParseWarning(
+                            kind="no_h2",
+                            detail="H3 found before any H2; synthesizing implicit epic from H1.",
+                        ))
+                    epic = EpicNode(
+                        title=page_title or "(untitled)",
+                        description_md="",
+                        spec_page_url=spec_page_url,
+                        spec_page_id=spec_page_id,
+                    )
+                    epics.append(epic)
+                    pending_target = "epic"
                 title, type_marker = _strip_type_marker(text)
                 story = StoryNode(
                     title=title,

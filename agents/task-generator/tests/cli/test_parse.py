@@ -57,7 +57,7 @@ def test_parse_warnings_propagate(monkeypatch, tmp_path, capsys):
     assert rc == 0
     ir = json.loads((tmp_path / "ir.json").read_text())
     kinds = [w["kind"] for w in ir["warnings"]]
-    assert "orphan_story" in kinds
+    # Phase 4+: H3 before any H2 → no_h2 warning + implicit epic from H1
     assert "no_h2" in kinds
 
 
