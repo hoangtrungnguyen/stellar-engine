@@ -94,11 +94,13 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
-def _plane_url(workspace: str, project_id: str, work_item_uuid: str) -> str:
-    return (
-        f"https://app.plane.so/{workspace}/projects/{project_id}"
-        f"/work-items/{work_item_uuid}/"
-    )
+def _plane_url(workspace: str, project_identifier: str, sequence_id) -> str:
+    """Build the human-readable Plane work-item URL.
+
+    Format: https://app.plane.so/{workspace}/browse/{IDENTIFIER}-{SEQ}/
+    e.g.    https://app.plane.so/sportbuddies/browse/WEBINTRO-166/
+    """
+    return f"https://app.plane.so/{workspace}/browse/{project_identifier}-{sequence_id}/"
 
 
 def _compose_grava_desc(
@@ -185,6 +187,7 @@ def execute(
     state: GravaState,
     state_path: Path,
     report_path: Path,
+    project_identifier: str = "",
     on_failure: Literal["prompt", "rollback", "abort"] = "prompt",
     actor: str = "task-generator",
     input_fn=input,
@@ -256,7 +259,7 @@ def execute(
 
             _dispatch_create_or_update(
                 op, idx, plane_state, state, plan,
-                client, project_id, workspace, spec_page_url,
+                client, project_id, project_identifier, workspace, spec_page_url,
                 target_repo, actor, run_subprocess,
                 report, create_order,
             )
@@ -327,6 +330,7 @@ def _dispatch_create_or_update(
     plan: RunPlan,
     client,
     project_id: str,
+    project_identifier: str,
     workspace: str,
     spec_page_url: str,
     target_repo: Path,
@@ -347,16 +351,18 @@ def _dispatch_create_or_update(
     desc_body = _strip_html(wi.get("description_html") or op.description_html)
     priority = _map_priority(wi.get("priority"))
 
-    own_url = _plane_url(workspace, project_id, plane_uuid)
+    own_url = _plane_url(workspace, project_identifier, seq)
     epic_ref, story_ref = _resolve_ancestors(op.ref_key)
+    epic_seq = plane_state.ref_to_sequence_id.get(epic_ref) if epic_ref else None
+    story_seq = plane_state.ref_to_sequence_id.get(story_ref) if story_ref else None
     epic_url = (
-        _plane_url(workspace, project_id, plane_state.ref_to_uuid[epic_ref])
-        if epic_ref and epic_ref in plane_state.ref_to_uuid
+        _plane_url(workspace, project_identifier, epic_seq)
+        if epic_seq is not None
         else None
     )
     story_url = (
-        _plane_url(workspace, project_id, plane_state.ref_to_uuid[story_ref])
-        if story_ref and story_ref in plane_state.ref_to_uuid
+        _plane_url(workspace, project_identifier, story_seq)
+        if story_seq is not None
         else None
     )
 
@@ -440,14 +446,10 @@ def _dispatch_create_or_update(
     create_order.append((idx, op.ref_key, grava_id))
 
     label_args = ["label", grava_id, "--add", f"plane:{seq}"]
-    if op.node_kind in ("story", "task"):
-        epic_seq = plane_state.ref_to_sequence_id.get(epic_ref) if epic_ref else None
-        if epic_seq is not None:
-            label_args += ["--add", f"plane-epic:{epic_seq}"]
-    if op.node_kind == "task":
-        story_seq = plane_state.ref_to_sequence_id.get(story_ref) if story_ref else None
-        if story_seq is not None:
-            label_args += ["--add", f"plane-story:{story_seq}"]
+    if op.node_kind in ("story", "task") and epic_seq is not None:
+        label_args += ["--add", f"plane-epic:{epic_seq}"]
+    if op.node_kind == "task" and story_seq is not None:
+        label_args += ["--add", f"plane-story:{story_seq}"]
     _run_grava(label_args, cwd=target_repo, actor=actor, runner=run_subprocess)
 
     report.grava_created.append({

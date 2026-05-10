@@ -79,6 +79,10 @@ class PlaneClient:
             return resp.json()
         raise PlaneClientError(429, "Too many retries", url)
 
+    # ── Project ──────────────────────────────────────
+    def get_project(self, project_id: str) -> dict:
+        return self._request("GET", f"projects/{project_id}/")
+
     # ── Pages ────────────────────────────────────────
     def get_page(self, project_id: str, page_id: str) -> dict:
         return self._request("GET", f"projects/{project_id}/pages/{page_id}/")

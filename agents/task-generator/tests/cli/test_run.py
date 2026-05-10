@@ -32,6 +32,9 @@ class FakeClient:
     def list_pages(self, project_id):
         return [{"id": "page-A", "name": "Auth", "access": 0}]
 
+    def get_project(self, project_id):
+        return {"id": project_id, "name": "Fake", "identifier": "FAKE"}
+
     def list_work_item_types(self, project_id):
         return [
             {"id": "t-epic", "name": "Epic"},

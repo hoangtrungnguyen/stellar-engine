@@ -44,6 +44,9 @@ class FakeClient:
     def list_labels(self, project_id):
         return self._labels
 
+    def get_project(self, project_id):
+        return {"id": project_id, "name": "Fake", "identifier": "FAKE"}
+
     def create_label(self, project_id, name, color="#888"):
         new = {"id": f"lbl-{name}", "name": name}
         self._labels.append(new)

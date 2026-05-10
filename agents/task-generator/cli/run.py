@@ -126,11 +126,13 @@ def main() -> int:
         return 3
 
     try:
+        project = client.get_project(args.project_id)
         types = client.list_work_item_types(args.project_id)
         labels = client.list_labels(args.project_id)
     except PlaneClientError as e:
         print(f"preflight failed: HTTP {e.status} on {e.url}", file=sys.stderr)
         return 1
+    project_identifier = project.get("identifier", "") or ""
 
     type_map = build_type_map(types)
     missing = missing_required_types(type_map)
@@ -183,6 +185,7 @@ def main() -> int:
 
     preflight_payload = {
         "project_id": args.project_id,
+        "project_identifier": project_identifier,
         "page_id": args.page_id,
         "target_title": target_title,
         "type_uuids": type_map,

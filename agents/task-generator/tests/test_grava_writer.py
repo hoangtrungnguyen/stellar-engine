@@ -21,6 +21,7 @@ from ir import (  # noqa: E402
 
 WORKSPACE = "ws"
 PROJECT_ID = "proj"
+PROJECT_IDENT = "PROJ"
 SPEC_URL = "https://app.plane.so/ws/projects/proj/pages/page-A/"
 
 
@@ -152,6 +153,7 @@ def _exec(plan, plane_state, target_repo, *, client=None, runner=None,
         state=state,
         state_path=state_path or (target_repo / "grava_state.json"),
         report_path=report_path or (target_repo / "report.json"),
+        project_identifier=PROJECT_IDENT,
         on_failure=on_failure,
         input_fn=input_fn or (lambda _msg: ""),
         run_subprocess=runner,
@@ -301,11 +303,12 @@ def test_description_embeds_plane_urls(tmp_path):
     d_idx = task_call["cmd"].index("-d")
     desc = task_call["cmd"][d_idx + 1]
     assert "Plane:" in desc
-    assert "/work-items/uT/" in desc
+    # New format: /browse/{IDENTIFIER}-{SEQ}/
+    assert f"/browse/{PROJECT_IDENT}-3/" in desc        # task seq=3
     assert "Plane epic:" in desc
-    assert "/work-items/uE/" in desc
+    assert f"/browse/{PROJECT_IDENT}-1/" in desc        # epic seq=1
     assert "Plane story:" in desc
-    assert "/work-items/uS/" in desc
+    assert f"/browse/{PROJECT_IDENT}-2/" in desc        # story seq=2
     assert f"Spec: {SPEC_URL}" in desc
 
     # Epic description must NOT include parent links (it's the root).
@@ -374,7 +377,7 @@ def test_update_path_skips_no_op_when_unchanged(tmp_path):
     client = FakePlaneClient(items={
         "uE": {"name": "EpicX", "description_html": "<p>body</p>", "priority": "high"},
     })
-    expected_desc = "Plane: https://app.plane.so/ws/projects/proj/work-items/uE/\n\nbody"
+    expected_desc = f"Plane: https://app.plane.so/ws/browse/{PROJECT_IDENT}-7/\n\nbody"
     runner = FakeRunner(responses={
         ("list", ("--label",)): [{
             "id": "grava-NO-OP",
@@ -563,6 +566,11 @@ def test_grava_create_failure_surfaces_error_message(tmp_path):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def test_plane_url_uses_browse_format():
+    url = grava_writer._plane_url("sportbuddies", "WEBINTRO", 166)
+    assert url == "https://app.plane.so/sportbuddies/browse/WEBINTRO-166/"
 
 
 def test_resolve_ancestors():

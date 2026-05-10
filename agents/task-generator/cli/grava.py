@@ -174,12 +174,14 @@ def main() -> int:
 
     report_path = args.target_repo / "runs" / "reports" / f"{run_id}.json"
 
+    project_identifier = pre_blob.get("project_identifier", "") or ""
     report = grava_writer.execute(
         plan, plane_state, args.target_repo, client, project_id,
         spec_page_url, workspace,
         state=state,
         state_path=state_path,
         report_path=report_path,
+        project_identifier=project_identifier,
         on_failure=args.on_failure,
         actor=args.actor,
     )
