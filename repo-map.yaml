@@ -24,4 +24,16 @@
 #     git_url: git@github.com:owner/my-repo.git
 #     workspace_prefix: PREFIX
 
-projects: {}
+projects:
+  # stellar-engine self-hosting: this very repo, mirrored to its own Plane
+  # project. Creds for the `stellar-engine` workspace must be supplied via env
+  # vars when running the agent against this project, e.g.:
+  #
+  #   PLANE_WORKSPACE=stellar-engine \
+  #   PLANE_API_TOKEN=plane_api_5b43b37f41834c2595241c136265242d \
+  #     python3 agents/task-generator/cli/run.py \
+  #       f0c79297-dc54-4762-9ced-dd5dafa85254 <page_id> --dry-run
+  "f0c79297-dc54-4762-9ced-dd5dafa85254":
+    repo_name: stellar-engine
+    git_url: https://github.com/hoangtrungnguyen/stellar-engine.git
+    workspace_prefix: STELENG
