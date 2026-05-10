@@ -101,10 +101,28 @@ class PlaneClient:
         return self._request("GET", f"projects/{project_id}/work-items/{issue_id}/")
 
     def search_work_items(self, project_id: str, **filters) -> list[dict]:
-        data = self._request("GET", f"projects/{project_id}/work-items/", params=filters)
-        if isinstance(data, list):
-            return data
-        return data.get("results", [])
+        """List work items, following cursor pagination until exhausted.
+
+        Plane returns up to ~100 items per page in a wrapper:
+        `{results: [...], next_cursor, next_page_results, ...}`.
+        """
+        params = dict(filters)
+        params.setdefault("per_page", 100)
+        out: list[dict] = []
+        seen_cursors: set[str] = set()
+        while True:
+            data = self._request("GET", f"projects/{project_id}/work-items/", params=params)
+            if isinstance(data, list):
+                out.extend(data)
+                return out
+            out.extend(data.get("results", []))
+            if not data.get("next_page_results"):
+                return out
+            cursor = data.get("next_cursor")
+            if not cursor or cursor in seen_cursors:
+                return out
+            seen_cursors.add(cursor)
+            params["cursor"] = cursor
 
     def create_work_item(self, project_id: str, payload: dict) -> dict:
         return self._request(

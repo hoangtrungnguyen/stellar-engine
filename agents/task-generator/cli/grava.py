@@ -122,6 +122,7 @@ def main() -> int:
         run_id=run_id,
         page_title=page_title,
         duplicates_bypassed=duplicates_bypassed,
+        spec_page_id=page_id,
     )
 
     state_path = work_dir / "grava_state.json"

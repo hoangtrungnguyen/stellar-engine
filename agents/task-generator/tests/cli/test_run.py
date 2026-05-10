@@ -42,6 +42,12 @@ class FakeClient:
     def list_labels(self, project_id):
         return []
 
+    def create_label(self, project_id, name, color="#888"):
+        return {"id": f"lbl-{name}", "name": name}
+
+    def search_work_items(self, project_id, **filters):
+        return []
+
 
 def _run(monkeypatch, capsys, argv):
     monkeypatch.setattr(sys, "argv", ["run.py", *argv])

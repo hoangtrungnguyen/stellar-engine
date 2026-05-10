@@ -20,6 +20,40 @@ REQUIRED_TYPES = ("epic", "story", "task")
 RELATED_SENTINEL_OPEN = "<!-- task-generator:related -->"
 RELATED_SENTINEL_CLOSE = "<!-- /task-generator:related -->"
 
+# Phase 4: every Plane work item created by task-generator carries this
+# sentinel label so re-runs can find existing items via label search.
+SENTINEL_LABEL_PREFIX = "tg:src:"
+
+# type_marker (parsed from spec like "P0:" / "Bug:") → Plane priority
+_PRIORITY_FROM_MARKER = {
+    "P0": "urgent",
+    "P1": "high",
+    "P2": "medium",
+    "P3": "low",
+}
+
+# type_marker → label name (applied alongside the sentinel + priority)
+_LABEL_FROM_MARKER = {
+    "Bug": "bug",
+    "Spike": "spike",
+}
+
+
+def sentinel_label_name(page_id: str) -> str:
+    return f"{SENTINEL_LABEL_PREFIX}{page_id}"
+
+
+def priority_from_marker(marker: str | None) -> str | None:
+    if not marker:
+        return None
+    return _PRIORITY_FROM_MARKER.get(marker)
+
+
+def label_from_marker(marker: str | None) -> str | None:
+    if not marker:
+        return None
+    return _LABEL_FROM_MARKER.get(marker)
+
 
 class PlannerError(Exception):
     pass
@@ -121,6 +155,8 @@ def plan_from_cached(
     run_id: str,
     page_title: str = "",
     duplicates_bypassed: list[dict] | None = None,
+    spec_page_id: str = "",
+    existing_plane: list[dict] | None = None,
 ) -> RunPlan:
     """Build the RunPlan from a list of epics. Phase 1 tolerates missing types.
 
@@ -129,38 +165,49 @@ def plan_from_cached(
 
     ref_key scheme (disambiguated for multi-epic): `epic:<i>`,
     `story:<i>.<j>`, `task:<i>.<j>.<k>`.
+
+    `spec_page_id` is the Plane page UUID — used to compute the sentinel label
+    name applied to every Plane create (Phase 4 idempotency).
     """
+    sentinel = sentinel_label_name(spec_page_id) if spec_page_id else None
+
+    def _create(node_kind, title, desc_md, type_key, parent_ref, ref_key, marker):
+        labels: list[str] = []
+        if sentinel:
+            labels.append(sentinel)
+        marker_label = label_from_marker(marker)
+        if marker_label:
+            labels.append(marker_label)
+        return CreateWorkItem(
+            node_kind=node_kind,
+            title=title,
+            description_html=_md_to_html(desc_md),
+            type_id_key=type_key,
+            parent_ref=parent_ref,
+            ref_key=ref_key,
+            label_keys=labels,
+            priority=priority_from_marker(marker),
+        )
+
     ops: list[Op] = []
 
     for i, epic in enumerate(epics):
         epic_ref = f"epic:{i}"
-        ops.append(CreateWorkItem(
-            node_kind="epic",
-            title=epic.title,
-            description_html=_md_to_html(epic.description_md),
-            type_id_key="epic",
-            parent_ref=None,
-            ref_key=epic_ref,
+        ops.append(_create(
+            "epic", epic.title, epic.description_md, "epic",
+            None, epic_ref, marker=None,
         ))
 
         for j, story in enumerate(epic.stories):
             story_ref = f"story:{i}.{j}"
-            ops.append(CreateWorkItem(
-                node_kind="story",
-                title=story.title,
-                description_html=_md_to_html(story.description_md),
-                type_id_key="story",
-                parent_ref=epic_ref,
-                ref_key=story_ref,
+            ops.append(_create(
+                "story", story.title, story.description_md, "story",
+                epic_ref, story_ref, marker=story.type_marker,
             ))
             for k, task in enumerate(story.tasks):
-                ops.append(CreateWorkItem(
-                    node_kind="task",
-                    title=task.title,
-                    description_html=_md_to_html(task.description_md),
-                    type_id_key="task",
-                    parent_ref=story_ref,
-                    ref_key=f"task:{i}.{j}.{k}",
+                ops.append(_create(
+                    "task", task.title, task.description_md, "task",
+                    story_ref, f"task:{i}.{j}.{k}", marker=task.type_marker,
                 ))
 
         if epic.open_questions:
@@ -183,6 +230,16 @@ def plan_from_cached(
                 if task.related_refs:
                     ops.append(_related_update(f"task:{i}.{j}.{k}", task.related_refs))
 
+    # Phase 4: build diff against existing Plane state if provided.
+    diff = None
+    if existing_plane is not None:
+        from reconcile import build_diff
+        diff = build_diff(
+            plan_ops=ops,
+            existing_plane=existing_plane,
+            type_map=type_map,
+        )
+
     master_path, per_epic_paths = _render_previews(
         epics=epics,
         ops=ops,
@@ -192,6 +249,7 @@ def plan_from_cached(
         run_id=run_id,
         page_title=page_title,
         duplicates_bypassed=duplicates_bypassed or [],
+        diff=diff,
     )
 
     return RunPlan(
@@ -242,6 +300,7 @@ def plan(
         run_id=run_id,
         page_title=page_title or target_title,
         duplicates_bypassed=duplicates if allow_duplicate_pages else [],
+        spec_page_id=page_id,
     )
 
 
@@ -293,6 +352,7 @@ def _render_previews(
     run_id: str,
     page_title: str,
     duplicates_bypassed: list[dict],
+    diff=None,
 ) -> tuple[Path, list[Path]]:
     """Render one preview per epic + a master overview. Return (master, [per_epic])."""
     preview_dir = target_repo / "runs" / "preview" / run_id
@@ -331,6 +391,29 @@ def _render_previews(
         lines.append("")
         for w in warnings:
             lines.append(f"- **{w.kind}**: {w.detail}")
+        lines.append("")
+
+    if diff is not None:
+        counts = diff.counts()
+        lines.append("## Reconciliation against existing Plane state")
+        lines.append("")
+        lines.append(
+            f"- Create: {counts['create']} | Update: {counts['update']} | "
+            f"No change: {counts['no_change']} | Orphan: {counts['orphan']}"
+        )
+        if counts["update"]:
+            lines.append("")
+            lines.append("**Updates** (existing items with drift; will be PATCHed):")
+            for ref_key, entry in diff.by_ref_key.items():
+                if entry.verdict != "update":
+                    continue
+                fields = ", ".join(entry.fields_changed)
+                lines.append(f"- `{ref_key}` ({entry.existing_uuid}) — fields: {fields}")
+        if counts["orphan"]:
+            lines.append("")
+            lines.append("**Orphans** (in Plane, missing from spec; never auto-deleted):")
+            for o in diff.orphans:
+                lines.append(f"- `{o.uuid}` (#{o.sequence_id}): {o.name!r}")
         lines.append("")
 
     if duplicates_bypassed:

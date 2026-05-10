@@ -79,6 +79,8 @@ def main() -> int:
         run_id=run_id,
         page_title=page_title,
         duplicates_bypassed=duplicates,
+        spec_page_id=pre_blob.get("page_id", ""),
+        existing_plane=pre_blob.get("existing_plane"),
     )
 
     print(str(rp.preview_path))

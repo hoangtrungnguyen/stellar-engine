@@ -1,11 +1,17 @@
-# task-generator (Phase 3)
+# task-generator (Phase 4)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), and mirrors
 the same hierarchy to Grava in the target repo.
 
-**Phase 3 = Grava mirror is live.** Phase 4 (full reconciler with diffs +
-orphan detection + bidirectional drift) lands in a follow-up session.
+**Phase 4 (current):** safe re-runs. Preflight lists existing Plane items
+via the per-page sentinel label `tg:src:<page_id>`, builds a diff, and the
+preview shows reconciliation counts + per-item verdicts (`create | update
+| no_change | orphan`). The writer honors verdicts — re-running against an
+unchanged spec is a no-op. Orphans are flagged but never deleted.
+
+`type_marker` (parsed prefixes like `P0:`, `Bug:`) now propagates: `P0/P1`
+→ Plane priority urgent/high; `Bug` / `Spike` → Plane labels.
 
 See `../../docs/task-generator-strategy-bullets.md` and
 `../../docs/task-generator/` for the design.
@@ -125,10 +131,18 @@ op already in `completed_op_indices`, picking up at the failed index.
 
 ## Re-running against the same Plane page
 
-- **Plane (Phase 2)** has no idempotency in Phase 2. Re-running creates
-  duplicates. Don't.
-- **Grava (Phase 3)** is idempotent via `plane:<seq>` label search. Re-running
-  is safe — Plane state propagates to Grava through the update path.
+Both phases are idempotent in Phase 4:
+
+- **Plane (Phase 2)** uses sentinel label `tg:src:<page_id>` (applied on
+  every create). Re-runs detect existing items, diff against the spec, and
+  skip / patch / create accordingly. Orphans flagged in the preview, never
+  auto-deleted.
+- **Grava (Phase 3)** uses `plane:<seq>` label search. Re-running propagates
+  Plane state into Grava via update path.
+
+Pre-Phase-4 Plane items (no sentinel label) appear as orphans on a re-run.
+Tag them in Plane UI with the right `tg:src:<page_id>` label or accept the
+fresh-create.
 
 ## `--on-failure` modes
 
@@ -190,9 +204,10 @@ Intermediate JSON lands at
 - **Phase 1:** parser + read-only Plane client + planner + dry-run preview.
 - **Phase 2:** Plane writes (creates / comments / Related-line description
   updates), checkpoint-based resume, optional rollback.
-- **Phase 3 (current):** Grava mirror with three-level subtask nesting,
-  cross-link labels, Plane-URL embedding, comment-back, and label-based
-  reconciliation (re-runs propagate Plane edits to Grava without duplicates).
-- **Phase 4:** Full reconciler — preview-time field-by-field diffs, orphan
-  detection, Plane-side reconciliation, bidirectional drift detection,
-  type_marker → Plane priority/type mapping.
+- **Phase 3:** Grava mirror with three-level subtask nesting, cross-link
+  labels, Plane-URL embedding, comment-back, and label-based reconciliation.
+- **Phase 4 (current):** Plane-side reconciliation — sentinel label per
+  spec page, preview-time diffs (`create / update / no_change / orphan`),
+  writer honors verdicts, `type_marker → priority/label` mapping.
+- **Phase 5+ (future):** bidirectional drift (Grava→Plane), orphan
+  remediation flows, sub-page expansion when Plane ships the API.

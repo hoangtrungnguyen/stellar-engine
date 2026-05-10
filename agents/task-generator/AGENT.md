@@ -1,9 +1,9 @@
 ---
 name: task-generator
-description: Convert one Plane spec page into a planned epic-story-task hierarchy, write it to Plane, then mirror it to Grava in the target repo. Phase 1 = preview. Phase 2 = Plane writes. Phase 3 = Grava mirror with label-based reconciliation. Every non-`--dry-run` invocation requires explicit operator approval per turn.
+description: Convert one Plane spec page into a planned epic-story-task hierarchy, write it to Plane, then mirror it to Grava in the target repo. Phase 4 (current) adds Plane-side reconciliation — re-runs detect existing items, diff against the spec, and skip / patch / create per item; orphans flagged but never deleted. Every non-`--dry-run` invocation requires explicit operator approval per turn.
 ---
 
-# task-generator (Phase 3)
+# task-generator (Phase 4)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), then mirrors
@@ -88,17 +88,32 @@ If `cli/write.py` exits 5 or `cli/grava.py` exits 5, the operator was told
 Do not resume automatically. Surface the failure to the operator and wait
 for instruction.
 
-## Re-runs and the Grava update path
+## Re-runs and reconciliation (Phase 4)
 
-Phase 3 reconciles Grava state by searching for the `plane:<seq>` label
-before each create. If a match is found, it **updates** the existing Grava
-issue (title / description / priority) instead of creating a duplicate. So
-re-running Phase C against the same Plane page is safe and propagates any
-hand-edits in Plane through to Grava.
+Both Plane and Grava re-runs are now safe.
 
-If two Grava issues somehow share the same `plane:<seq>` label, the writer
-records the anomaly in `report.grava_anomalies` and skips that item.
-Surface this to the operator.
+**Plane (Phase B):** `cli/preflight.py` lists existing items via the per-page
+sentinel label `tg:src:<page_id>`, builds a diff against the spec
+(`create | update | no_change | orphan`), and the preview's
+`## Reconciliation` section reports counts + per-item verdict. The writer
+honors verdicts: skips `no_change`, PATCHes `update`, POSTs `create`. Items
+in Plane but not in the spec are flagged as **orphans** — never deleted.
+
+**Grava (Phase C):** label-based reconciliation by `plane:<seq>` (carried
+over from Phase 3). If a Grava issue exists for a Plane seq, it's updated
+in place; else created.
+
+If two Grava issues share the same `plane:<seq>` label, the writer records
+the anomaly in `report.grava_anomalies` and skips that item. Surface this
+to the operator.
+
+### Pre-Phase-4 items
+
+Plane work items created before Phase 4 don't carry the sentinel label, so
+they appear as orphans on a re-run. Either (a) tag them in the Plane web UI
+with the appropriate `tg:src:<page_id>` label and re-run, or (b) accept the
+orphan flag and let the new run create fresh items. Phase 4 never auto-tags
+or auto-deletes — operator decides.
 
 ## Hard limits
 

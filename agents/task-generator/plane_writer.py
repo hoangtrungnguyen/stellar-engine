@@ -78,6 +78,8 @@ def execute(
     on_failure: Literal["prompt", "rollback", "abort"] = "prompt",
     progress_every: int = 25,
     input_fn=input,
+    label_map: dict[str, str] | None = None,
+    diff=None,
 ) -> RunReport:
     report = RunReport(
         run_id=state.run_id,
@@ -97,7 +99,10 @@ def execute(
         for idx, op in enumerate(plan.plane_ops):
             if idx in completed:
                 continue
-            _dispatch(op, idx, client, project_id, type_map, state, report, create_order)
+            _dispatch(
+                op, idx, client, project_id, type_map, state, report,
+                create_order, label_map or {}, diff,
+            )
             completed.add(idx)
             state.completed_op_indices = sorted(completed)
             _atomic_write_state(state, state_path)
@@ -129,8 +134,52 @@ def _dispatch(
     state: RunState,
     report: RunReport,
     create_order: list[tuple[int, str, str]],
+    label_map: dict[str, str],
+    diff=None,
 ) -> None:
     if isinstance(op, CreateWorkItem):
+        # Phase 4: consult the diff to decide create vs update vs skip.
+        verdict_entry = diff.by_ref_key.get(op.ref_key) if diff is not None else None
+        if verdict_entry is not None and verdict_entry.verdict == "no_change":
+            existing_uuid = verdict_entry.existing_uuid
+            state.ref_to_uuid[op.ref_key] = existing_uuid
+            if verdict_entry.existing_sequence_id is not None:
+                state.ref_to_sequence_id[op.ref_key] = verdict_entry.existing_sequence_id
+            report.plane_created.append({
+                "op_index": idx,
+                "ref_key": op.ref_key,
+                "node_kind": op.node_kind,
+                "uuid": existing_uuid,
+                "sequence_id": verdict_entry.existing_sequence_id,
+                "title": op.title,
+                "verdict": "no_change",
+            })
+            return
+        if verdict_entry is not None and verdict_entry.verdict == "update":
+            existing_uuid = verdict_entry.existing_uuid
+            patch = {}
+            for f in verdict_entry.fields_changed:
+                if f == "title":
+                    patch["name"] = op.title
+                elif f == "description_html":
+                    patch["description_html"] = op.description_html
+                elif f == "priority":
+                    patch["priority"] = op.priority or "none"
+            if patch:
+                client.update_work_item(project_id, existing_uuid, patch)
+            state.ref_to_uuid[op.ref_key] = existing_uuid
+            if verdict_entry.existing_sequence_id is not None:
+                state.ref_to_sequence_id[op.ref_key] = verdict_entry.existing_sequence_id
+            report.plane_updated.append({
+                "op_index": idx,
+                "ref_key": op.ref_key,
+                "target_uuid": existing_uuid,
+                "fields": list(patch.keys()),
+                "verdict": "update",
+            })
+            return
+
+        # Default = create path (Phase 2 behaviour).
         type_id = type_map.get(op.type_id_key) or ""
         if not type_id:
             raise RuntimeError(
@@ -151,6 +200,11 @@ def _dispatch(
                     f"(parent not created yet)."
                 )
             payload["parent"] = parent_uuid
+        label_uuids = [label_map[k] for k in op.label_keys if k in label_map]
+        if label_uuids:
+            payload["labels"] = label_uuids
+        if op.priority:
+            payload["priority"] = op.priority
         resp = client.create_work_item(project_id, payload)
         new_id = resp.get("id")
         seq = resp.get("sequence_id")
@@ -196,6 +250,17 @@ def _dispatch(
         if append_html:
             current = client.get_work_item(project_id, target_uuid)
             existing = current.get("description_html") or ""
+            # Phase 4: idempotent — if the planned append text is already
+            # present (sentinel-fenced block from a prior run), no-op.
+            if append_html.strip() in existing:
+                report.plane_updated.append({
+                    "op_index": idx,
+                    "target_ref_key": op.target_ref_key,
+                    "target_uuid": target_uuid,
+                    "fields": [],
+                    "verdict": "no_change_related_already_present",
+                })
+                return
             patch["description_html"] = existing + append_html
         client.update_work_item(project_id, target_uuid, patch)
         report.plane_updated.append({

@@ -44,6 +44,14 @@ class FakeClient:
     def list_labels(self, project_id):
         return self._labels
 
+    def create_label(self, project_id, name, color="#888"):
+        new = {"id": f"lbl-{name}", "name": name}
+        self._labels.append(new)
+        return new
+
+    def search_work_items(self, project_id, **filters):
+        return []
+
 
 def _run(monkeypatch, capsys, argv):
     monkeypatch.setattr(sys, "argv", ["preflight.py", *argv])

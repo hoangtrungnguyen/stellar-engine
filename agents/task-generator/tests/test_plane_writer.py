@@ -322,6 +322,136 @@ def test_execute_missing_type_raises_helpful_error(tmp_path):
     assert "epic" in report.failed_op["detail"]
 
 
+def test_create_applies_label_uuids(tmp_path):
+    """label_keys on CreateWorkItem are resolved via label_map and sent in payload."""
+    op = CreateWorkItem(
+        node_kind="task", title="t", description_html="x",
+        type_id_key="task", parent_ref=None, ref_key="task:0",
+        label_keys=["tg:src:page-A", "bug"],
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    label_map = {"tg:src:page-A": "lbl-1", "bug": "lbl-2", "ignored": "lbl-3"}
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        label_map=label_map,
+    )
+    create_call = next(c for c in client.calls if c[0] == "create")
+    assert sorted(create_call[2]["labels"]) == ["lbl-1", "lbl-2"]
+
+
+def test_create_propagates_priority(tmp_path):
+    op = CreateWorkItem(
+        node_kind="task", title="t", description_html="x",
+        type_id_key="task", parent_ref=None, ref_key="task:0",
+        priority="urgent",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+    )
+    create_call = next(c for c in client.calls if c[0] == "create")
+    assert create_call[2]["priority"] == "urgent"
+
+
+def test_diff_no_change_skips_create(tmp_path):
+    """When diff says no_change for a ref_key, writer registers the existing
+    UUID into state without firing a create."""
+    from reconcile import DiffEntry, ReconciliationDiff
+
+    op = CreateWorkItem(
+        node_kind="epic", title="E", description_html="<p>e</p>",
+        type_id_key="epic", parent_ref=None, ref_key="epic:0",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    diff = ReconciliationDiff(by_ref_key={
+        "epic:0": DiffEntry(
+            ref_key="epic:0", verdict="no_change",
+            existing_uuid="uPRE", existing_sequence_id=42,
+        ),
+    })
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        diff=diff,
+    )
+    create_calls = [c for c in client.calls if c[0] == "create"]
+    assert create_calls == []
+    assert state.ref_to_uuid["epic:0"] == "uPRE"
+    assert state.ref_to_sequence_id["epic:0"] == 42
+    assert report.plane_created[0]["verdict"] == "no_change"
+
+
+def test_diff_update_patches_only_changed_fields(tmp_path):
+    from reconcile import DiffEntry, ReconciliationDiff
+
+    op = CreateWorkItem(
+        node_kind="epic", title="New title", description_html="<p>new</p>",
+        type_id_key="epic", parent_ref=None, ref_key="epic:0",
+        priority="high",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    diff = ReconciliationDiff(by_ref_key={
+        "epic:0": DiffEntry(
+            ref_key="epic:0", verdict="update",
+            existing_uuid="uPRE", existing_sequence_id=10,
+            fields_changed=["title", "priority"],
+        ),
+    })
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        diff=diff,
+    )
+    create_calls = [c for c in client.calls if c[0] == "create"]
+    update_calls = [c for c in client.calls if c[0] == "update"]
+    assert create_calls == []
+    assert len(update_calls) == 1
+    body = update_calls[0][3]
+    assert body == {"name": "New title", "priority": "high"}
+    assert state.ref_to_uuid["epic:0"] == "uPRE"
+    assert report.plane_updated[0]["fields"] == ["name", "priority"]
+
+
+def test_diff_create_path_when_not_in_diff(tmp_path):
+    """Verdict for op.ref_key not in diff → fall through to create."""
+    from reconcile import ReconciliationDiff
+
+    op = CreateWorkItem(
+        node_kind="epic", title="E", description_html="<p>e</p>",
+        type_id_key="epic", parent_ref=None, ref_key="epic:0",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        diff=ReconciliationDiff(),
+    )
+    create_calls = [c for c in client.calls if c[0] == "create"]
+    assert len(create_calls) == 1
+
+
 def test_create_omits_empty_description_html(tmp_path):
     """Plane rejects description_html='' with 'Invalid HTML passed' — omit it instead."""
     op = CreateWorkItem(

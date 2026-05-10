@@ -25,6 +25,7 @@ from planner import (  # noqa: E402
     find_duplicate_pages,
     missing_required_types,
     plan_from_cached,
+    sentinel_label_name,
 )
 from repo_map import RepoMapError, lookup_project  # noqa: E402
 
@@ -142,6 +143,37 @@ def main() -> int:
         )
     label_map = build_label_map(labels)
 
+    sentinel_name = sentinel_label_name(args.page_id)
+    sentinel_label_id = label_map.get(sentinel_name)
+    if not sentinel_label_id:
+        try:
+            created = client.create_label(args.project_id, sentinel_name)
+            sentinel_label_id = created.get("id")
+            if sentinel_label_id:
+                label_map[sentinel_name] = sentinel_label_id
+                print(
+                    f"Created sentinel label {sentinel_name!r}",
+                    file=sys.stderr,
+                )
+        except PlaneClientError as e:
+            print(
+                f"WARNING: could not create sentinel label: HTTP {e.status} on {e.url}.",
+                file=sys.stderr,
+            )
+
+    existing_plane: list[dict] = []
+    if sentinel_label_id:
+        try:
+            from preflight import _fetch_existing_with_label
+            existing_plane = _fetch_existing_with_label(
+                client, args.project_id, sentinel_label_id,
+            )
+        except PlaneClientError as e:
+            print(
+                f"WARNING: could not list existing Plane items: HTTP {e.status} on {e.url}.",
+                file=sys.stderr,
+            )
+
     if duplicates and args.allow_duplicate_pages:
         print(
             f"WARNING: bypassed {len(duplicates)} duplicate page(s); "
@@ -156,6 +188,9 @@ def main() -> int:
         "type_uuids": type_map,
         "missing_types": missing,
         "label_uuids": label_map,
+        "sentinel_label_name": sentinel_name,
+        "sentinel_label_id": sentinel_label_id,
+        "existing_plane": existing_plane,
         "duplicates": duplicates,
         "duplicates_bypassed": bool(duplicates and args.allow_duplicate_pages),
     }
@@ -186,6 +221,8 @@ def main() -> int:
         run_id=run_id,
         page_title=page_payload["title"],
         duplicates_bypassed=duplicates if args.allow_duplicate_pages else [],
+        spec_page_id=args.page_id,
+        existing_plane=existing_plane,
     )
 
     create_count = sum(1 for _ in rp.plane_ops if type(_).__name__ == "CreateWorkItem")

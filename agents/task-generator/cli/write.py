@@ -99,6 +99,7 @@ def main() -> int:
 
     run_id = args.run_id or work_dir.name
 
+    existing_plane = pre_blob.get("existing_plane") or []
     plan = plan_from_cached(
         epics=epics,
         type_map=type_map,
@@ -108,6 +109,15 @@ def main() -> int:
         run_id=run_id,
         page_title=page_title,
         duplicates_bypassed=duplicates_bypassed,
+        spec_page_id=page_id,
+        existing_plane=existing_plane,
+    )
+
+    from reconcile import build_diff
+    diff = build_diff(
+        plan_ops=plan.plane_ops,
+        existing_plane=existing_plane,
+        type_map=type_map,
     )
 
     state_path = work_dir / "run_state.json"
@@ -162,6 +172,8 @@ def main() -> int:
         state_path=state_path,
         report_path=report_path,
         on_failure=args.on_failure,
+        label_map=label_map,
+        diff=diff,
     )
 
     print(f"report: {report_path}")

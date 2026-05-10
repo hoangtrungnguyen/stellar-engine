@@ -58,6 +58,7 @@ class CreateWorkItem:
     parent_ref: str | None
     ref_key: str
     label_keys: list[str] = field(default_factory=list)
+    priority: str | None = None  # urgent|high|medium|low|none — Plane priority field
 
 
 @dataclass
