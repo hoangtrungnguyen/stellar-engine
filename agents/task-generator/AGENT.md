@@ -77,8 +77,15 @@ python3 agents/task-generator/cli/grava.py \
 ```
 
 After Phase C, the same report at `<repo>/runs/reports/<run_id>.json` now
-also contains `grava_created`, `grava_updated`, `grava_anomalies`, and
-`grava_commit_hash`.
+also contains `grava_created`, `grava_updated`, `grava_anomalies`,
+`grava_deps_created`, `grava_deps_skipped`, and `grava_commit_hash`.
+
+If `<work_dir>/dep_graph.json` exists (it does whenever cli/run.py ran the
+analyzer), `cli/grava.py` mirrors each resolved epic dependency into Grava
+via `grava dep <src> <dst> --type blocks`. Idempotent: re-runs skip edges
+that already exist (Grava returns a duplicate-primary-key error which the
+writer treats as no-op success). State is checkpointed in
+`grava_state.dep_edges_posted` so partial runs resume cleanly.
 
 ### Single-shot (composes all three phases)
 
@@ -163,7 +170,8 @@ instruction. Tell the operator:
 
 - `Bash(python3 agents/task-generator/cli/* *)` — invoke any CLI script.
 - `Bash(grava *)` — only invoked transitively by `cli/grava.py` (and by
-  `grava_writer.py` via subprocess).
+  `grava_writer.py` via subprocess). Includes `grava dep` for mirroring
+  Phase 5 epic dependency edges.
 - `Bash(git clone *)` — only invoked transitively by `resolve_repo.py`.
 - `Read(*)` — open the preview file, the report JSON, or any work-dir intermediate.
 

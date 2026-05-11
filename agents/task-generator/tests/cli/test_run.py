@@ -261,6 +261,51 @@ def test_run_writes_dep_graph_and_reorders(monkeypatch, tmp_path, capsys):
         e["src_epic_idx"] == 0 and e["dst_epic_idx"] == 1
         for e in blob["edges"]
     )
+    # resolved_edges uses post-reorder ref_keys (Schema is now at index 0,
+    # Auth at index 1 — same as original here since markdown order matched).
+    assert blob["resolved_edges"]
+    assert blob["resolved_edges"][0]["src_ref_key"] == "epic:0"
+    assert blob["resolved_edges"][0]["dst_ref_key"] == "epic:1"
+
+
+def test_run_resolved_edges_post_reorder(monkeypatch, tmp_path, capsys):
+    """When markdown order disagrees with topo order, resolved_edges must
+    point at the post-reorder ref_keys, not the original ones."""
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    # Markdown order: Auth then Schema; Auth depends on Schema.
+    # Topo order: Schema (idx 0 post-reorder), Auth (idx 1 post-reorder).
+    REORDER_HTML = (
+        "<h1>Page</h1>"
+        "<h2>Auth migration</h2>"
+        "<blockquote>Depends on: Schema cleanup</blockquote>"
+        "<h2>Schema cleanup</h2><p>prep work</p>"
+    )
+
+    class ReorderClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {"name": "ReorderPage", "description_html": REORDER_HTML}
+
+    monkeypatch.setattr(run_cli, "PlaneClient", ReorderClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "runreorder",
+    ])
+    assert rc == 0
+    work_dir = target / "runs" / "work" / "runreorder"
+    blob = json.loads((work_dir / "dep_graph.json").read_text())
+    assert blob["reordered"] is True
+    # Schema comes first now.
+    assert blob["epic_titles"][0] == "Schema cleanup"
+    assert blob["epic_titles"][1] == "Auth migration"
+    # resolved_edges should point at Schema (epic:0) → Auth (epic:1).
+    assert len(blob["resolved_edges"]) == 1
+    edge = blob["resolved_edges"][0]
+    assert edge["src_ref_key"] == "epic:0"
+    assert edge["dst_ref_key"] == "epic:1"
+    assert edge["src_title"] == "Schema cleanup"
+    assert edge["dst_title"] == "Auth migration"
 
 
 def test_run_cycle_blocks_with_exit_7(monkeypatch, tmp_path, capsys):

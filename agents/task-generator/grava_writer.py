@@ -1,4 +1,4 @@
-"""Grava writer (Phase 3): mirror the Plane hierarchy into Grava.
+"""Grava writer (Phase 3 + Phase 5 deps): mirror the Plane hierarchy into Grava.
 
 Walks the same plane_ops produced by planner.plan_from_cached, dispatching
 only `CreateWorkItem` ops. For each op:
@@ -15,6 +15,11 @@ only `CreateWorkItem` ops. For each op:
 After all creates/updates land, post a Plane comment on each freshly-created
 work item (UPDATE path skips comment-back — that comment exists from the
 prior mirror run).
+
+Phase 5: if `dep_edges` is passed (from cli/run.py's dep_graph.json), walk
+the resolved edge list and post `grava dep <src> <dst> --type blocks` for
+each. Idempotent: a duplicate-primary-key error is treated as success and
+checkpointed in `state.dep_edges_posted` so resume runs skip it.
 
 Final step: `grava commit -m ...` to persist Dolt history. Hash captured in
 the report.
@@ -192,6 +197,7 @@ def execute(
     actor: str = "task-generator",
     input_fn=input,
     run_subprocess: Callable = subprocess.run,
+    dep_edges: list[dict] | None = None,
 ) -> RunReport:
     """Mirror the Plane hierarchy into Grava. See module docstring for the algorithm."""
     if not (target_repo / ".grava.yaml").exists():
@@ -285,6 +291,15 @@ def execute(
                 "source": "grava_mirror",
             })
             _atomic_write_state(state, state_path)
+
+        # Apply Grava dep edges (mirrors the analyzer's epic dependency graph).
+        # Edge semantics: `src blocks dst`, so `dst` cannot start until `src`
+        # is done. Run after creates+comments so all Grava IDs are resolved.
+        if dep_edges:
+            _apply_dep_edges(
+                dep_edges, plan, state, report, target_repo,
+                actor, run_subprocess, state_path,
+            )
 
         commit_msg = (
             f"task-generator: mirror Plane page {plane_state.page_id} "
@@ -461,6 +476,81 @@ def _dispatch_create_or_update(
         "plane_seq_id": seq,
         "priority": priority,
     })
+
+
+_DUPLICATE_DEP_RE = re.compile(r"duplicate primary key", re.IGNORECASE)
+
+
+def _edge_key(src_ref: str, dst_ref: str, kind: str) -> str:
+    return f"{src_ref}->{dst_ref}:{kind}"
+
+
+def _apply_dep_edges(
+    dep_edges: list[dict],
+    plan: RunPlan,
+    state: GravaState,
+    report: RunReport,
+    target_repo: Path,
+    actor: str,
+    run_subprocess: Callable,
+    state_path: Path,
+) -> None:
+    """Walk dep_edges, post `grava dep <src> <dst> --type blocks` for each.
+
+    Idempotent: a duplicate-primary-key error from Grava is treated as
+    success and recorded in `state.dep_edges_posted` so resume runs skip it.
+    Skips edges whose src or dst grava_id is unknown (e.g. anomaly skip on
+    the create side) and surfaces the reason in `report.grava_deps_skipped`.
+    """
+    posted = set(state.dep_edges_posted)
+    for edge in dep_edges:
+        src_ref = edge.get("src_ref_key", "")
+        dst_ref = edge.get("dst_ref_key", "")
+        kind = edge.get("type", "blocks")
+        key = _edge_key(src_ref, dst_ref, kind)
+        if key in posted:
+            continue
+        src_id = state.ref_to_grava_id.get(src_ref)
+        dst_id = state.ref_to_grava_id.get(dst_ref)
+        if not src_id or not dst_id:
+            report.grava_deps_skipped.append({
+                "src_ref_key": src_ref,
+                "dst_ref_key": dst_ref,
+                "type": kind,
+                "reason": (
+                    f"unresolved grava id (src={src_id or 'missing'} "
+                    f"dst={dst_id or 'missing'}); likely anomaly on create side."
+                ),
+            })
+            continue
+
+        try:
+            resp = _run_grava(
+                ["dep", src_id, dst_id, "--type", kind],
+                cwd=target_repo, actor=actor, runner=run_subprocess,
+            )
+            created = True
+        except RuntimeError as exc:
+            if _DUPLICATE_DEP_RE.search(str(exc)):
+                # Already-existing edge — treat as no-op success.
+                resp = {"status": "exists", "from_id": src_id, "to_id": dst_id, "type": kind}
+                created = False
+            else:
+                raise
+
+        posted.add(key)
+        state.dep_edges_posted = sorted(posted)
+        report.grava_deps_created.append({
+            "src_ref_key": src_ref,
+            "dst_ref_key": dst_ref,
+            "src_grava_id": src_id,
+            "dst_grava_id": dst_id,
+            "type": kind,
+            "raw_ref": edge.get("raw_ref"),
+            "source": edge.get("source"),
+            "created": created,
+        })
+        _atomic_write_state(state, state_path)
 
 
 def _resolve_ancestors(ref_key: str) -> tuple[str | None, str | None]:

@@ -253,7 +253,12 @@ Intermediate JSON lands at
   body; the analyzer strips them, builds a directed graph, detects cycles,
   and topologically reorders epics so prerequisites are created in Plane
   before their dependents. Artifact: `<work_dir>/dep_graph.json`. Preview
-  gains a `## Dependencies` section.
+  gains a `## Dependencies` section. **Grava mirror also reflects the
+  graph:** for each resolved edge, the writer runs
+  `grava dep <prereq_grava_id> <dependent_grava_id> --type blocks`
+  (idempotent — duplicate edges are no-ops). Per-edge state is checkpointed
+  in `grava_state.dep_edges_posted` so resume runs skip already-posted
+  edges.
 - **Phase 6+ (future):** bidirectional drift (Grava→Plane), Plane
   work-item-relations (encode the dep edges natively in Plane), LLM-assisted
   dep inference when no explicit markup exists, orphan remediation flows,

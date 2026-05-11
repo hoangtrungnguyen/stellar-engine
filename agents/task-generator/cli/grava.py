@@ -71,6 +71,7 @@ def main() -> int:
     pre_path = work_dir / "preflight.json"
     ir_path = work_dir / "ir.json"
     plane_state_path = work_dir / "run_state.json"
+    dep_path = work_dir / "dep_graph.json"
     for p in (page_path, pre_path, ir_path, plane_state_path):
         if not p.exists():
             print(f"missing required file: {p}", file=sys.stderr)
@@ -175,6 +176,15 @@ def main() -> int:
     report_path = args.target_repo / "runs" / "reports" / f"{run_id}.json"
 
     project_identifier = pre_blob.get("project_identifier", "") or ""
+
+    dep_edges: list[dict] = []
+    if dep_path.exists():
+        try:
+            dep_blob = json.loads(dep_path.read_text(encoding="utf-8"))
+            dep_edges = dep_blob.get("resolved_edges", []) or []
+        except json.JSONDecodeError as e:
+            print(f"WARNING: could not parse dep_graph.json: {e}", file=sys.stderr)
+
     report = grava_writer.execute(
         plan, plane_state, args.target_repo, client, project_id,
         spec_page_url, workspace,
@@ -184,6 +194,7 @@ def main() -> int:
         project_identifier=project_identifier,
         on_failure=args.on_failure,
         actor=args.actor,
+        dep_edges=dep_edges,
     )
 
     print(f"report: {report_path}")
@@ -192,6 +203,8 @@ def main() -> int:
         f"grava_updated={len(report.grava_updated)} "
         f"anomalies={len(report.grava_anomalies)} "
         f"plane_comments={len(report.plane_comments)} "
+        f"deps_created={len(report.grava_deps_created)} "
+        f"deps_skipped={len(report.grava_deps_skipped)} "
         f"commit={report.grava_commit_hash or '(none)'} "
         f"failed={'yes' if report.failed_op else 'no'} "
         f"rolled_back={report.rolled_back}"

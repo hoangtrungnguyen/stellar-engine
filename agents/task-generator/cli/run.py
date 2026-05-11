@@ -255,13 +255,42 @@ def main() -> int:
     }
     (work_dir / "ir.json").write_text(json.dumps(ir_payload, indent=2), encoding="utf-8")
 
+    # Translate edges' original epic indices into post-reorder ref_keys so the
+    # Grava writer (which only sees plan_ops) can resolve them without knowing
+    # the topo permutation.
+    reordered = not args.no_dep_reorder and not dep_graph.cycles
+    if reordered:
+        inv_topo = [0] * len(epics)
+        for new_idx, old_idx in enumerate(dep_graph.topo_order):
+            inv_topo[old_idx] = new_idx
+        def _to_ref(orig_idx: int) -> str:
+            return f"epic:{inv_topo[orig_idx]}"
+    else:
+        def _to_ref(orig_idx: int) -> str:
+            return f"epic:{orig_idx}"
+
+    resolved_edges = [
+        {
+            "src_ref_key": _to_ref(e.src_epic_idx),
+            "dst_ref_key": _to_ref(e.dst_epic_idx),
+            "src_title": dep_graph.epic_titles_original[e.src_epic_idx]
+            if e.src_epic_idx < len(dep_graph.epic_titles_original) else "",
+            "dst_title": dep_graph.epic_titles_original[e.dst_epic_idx]
+            if e.dst_epic_idx < len(dep_graph.epic_titles_original) else "",
+            "source": e.source,
+            "raw_ref": e.raw_ref,
+        }
+        for e in dep_graph.edges
+    ]
+
     dep_payload = {
         "edges": [dataclasses.asdict(e) for e in dep_graph.edges],
+        "resolved_edges": resolved_edges,
         "unresolved_refs": dep_graph.unresolved_refs,
         "cycles": dep_graph.cycles,
         "topo_order": dep_graph.topo_order,
         "original_order": dep_graph.original_order,
-        "reordered": not args.no_dep_reorder and not dep_graph.cycles,
+        "reordered": reordered,
         "epic_titles": [e.title for e in epics],
     }
     (work_dir / "dep_graph.json").write_text(json.dumps(dep_payload, indent=2), encoding="utf-8")

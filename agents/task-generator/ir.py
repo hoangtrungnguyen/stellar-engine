@@ -123,6 +123,8 @@ class RunReport:
     grava_updated: list[dict] = field(default_factory=list)
     grava_anomalies: list[dict] = field(default_factory=list)
     grava_orphans: list[dict] = field(default_factory=list)
+    grava_deps_created: list[dict] = field(default_factory=list)
+    grava_deps_skipped: list[dict] = field(default_factory=list)
     grava_commit_hash: str | None = None
     started_at: str = ""
     finished_at: str = ""
@@ -156,6 +158,7 @@ class GravaState:
     completed_op_indices: list[int] = field(default_factory=list)
     ref_to_grava_id: dict[str, str] = field(default_factory=dict)
     plane_comments_posted: list[str] = field(default_factory=list)
+    dep_edges_posted: list[str] = field(default_factory=list)
     failed_op_index: int | None = None
     failure_detail: str | None = None
     rolled_back: bool = False
