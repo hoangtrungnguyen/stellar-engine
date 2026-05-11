@@ -32,6 +32,8 @@ class EpicNode:
     risks: list[str] = field(default_factory=list)
     stories: list[StoryNode] = field(default_factory=list)
     related_refs: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
 
 
 ParseWarningKind = Literal[
@@ -40,7 +42,28 @@ ParseWarningKind = Literal[
     "unknown_section",
     "no_h2",
     "fenced_code_heading",
+    "unresolved_dep_ref",
+    "self_dep",
+    "dep_cycle",
 ]
+
+
+@dataclass
+class DependencyEdge:
+    src_epic_idx: int
+    dst_epic_idx: int
+    source: Literal["depends_on", "blocks", "after"]
+    raw_ref: str
+
+
+@dataclass
+class DependencyGraph:
+    edges: list[DependencyEdge] = field(default_factory=list)
+    unresolved_refs: list[dict] = field(default_factory=list)
+    cycles: list[list[int]] = field(default_factory=list)
+    topo_order: list[int] = field(default_factory=list)
+    original_order: list[int] = field(default_factory=list)
+    epic_titles_original: list[str] = field(default_factory=list)
 
 
 @dataclass

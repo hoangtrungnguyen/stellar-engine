@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import dependency_analyzer  # noqa: E402
 from parser import html_to_markdown, parse  # noqa: E402
 from plane_client import PlaneClient, PlaneClientError, load_credentials  # noqa: E402
 from planner import (  # noqa: E402
@@ -48,6 +49,13 @@ def main() -> int:
     ap.add_argument("--json-report", type=Path, default=None,
                     help="Override the default JSON report path.")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--no-dep-reorder", action="store_true",
+                    help="Detect epic dependencies but keep markdown order "
+                         "(default: reorder topologically when no cycle).")
+    ap.add_argument("--allow-dep-cycles", action="store_true",
+                    help="Continue when a cycle is detected (skips reorder).")
+    ap.add_argument("--strict-deps", action="store_true",
+                    help="Fail when a dependency ref cannot be resolved.")
     args = ap.parse_args()
 
     # Step 1: resolve repo (clone if missing)
@@ -207,12 +215,56 @@ def main() -> int:
         spec_page_id=args.page_id,
         workspace_prefix=mapping.workspace_prefix,
     )
+
+    # Step 5b: dependency analysis
+    dep_graph, dep_warnings = dependency_analyzer.analyze(epics)
+    warnings.extend(dep_warnings)
+
+    if args.strict_deps and dep_graph.unresolved_refs:
+        print(
+            f"Unresolved dependency ref(s) under --strict-deps:",
+            file=sys.stderr,
+        )
+        for u in dep_graph.unresolved_refs:
+            print(
+                f"  - epic {u['epic_idx'] + 1} ({u['epic_title']!r}) → {u['kind']} {u['raw_ref']!r}",
+                file=sys.stderr,
+            )
+        return 7
+
+    if dep_graph.cycles and not args.allow_dep_cycles:
+        print("Dependency cycle(s) detected — refusing to proceed:", file=sys.stderr)
+        for cyc in dep_graph.cycles:
+            names = " -> ".join(epics[i].title for i in cyc + [cyc[0]])
+            print(f"  - {names}", file=sys.stderr)
+        print(
+            "Resolve in the spec page (remove or rewrite the offending "
+            "`> Depends on:` blockquotes), or re-run with --allow-dep-cycles "
+            "to skip topological reordering.",
+            file=sys.stderr,
+        )
+        return 7
+
+    if not args.no_dep_reorder:
+        epics = dependency_analyzer.reorder(epics, dep_graph)
+
     ir_payload = {
         "epics": [dataclasses.asdict(e) for e in epics],
         "warnings": [dataclasses.asdict(w) for w in warnings],
         "page_title": page_payload["title"],
     }
     (work_dir / "ir.json").write_text(json.dumps(ir_payload, indent=2), encoding="utf-8")
+
+    dep_payload = {
+        "edges": [dataclasses.asdict(e) for e in dep_graph.edges],
+        "unresolved_refs": dep_graph.unresolved_refs,
+        "cycles": dep_graph.cycles,
+        "topo_order": dep_graph.topo_order,
+        "original_order": dep_graph.original_order,
+        "reordered": not args.no_dep_reorder and not dep_graph.cycles,
+        "epic_titles": [e.title for e in epics],
+    }
+    (work_dir / "dep_graph.json").write_text(json.dumps(dep_payload, indent=2), encoding="utf-8")
 
     # Step 6: render preview
     rp = plan_from_cached(
@@ -226,6 +278,7 @@ def main() -> int:
         duplicates_bypassed=duplicates if args.allow_duplicate_pages else [],
         spec_page_id=args.page_id,
         existing_plane=existing_plane,
+        dep_graph=dep_graph,
     )
 
     create_count = sum(1 for _ in rp.plane_ops if type(_).__name__ == "CreateWorkItem")
@@ -237,6 +290,12 @@ def main() -> int:
         f"summary: epics={len(epics)} ops={len(rp.plane_ops)} "
         f"(create={create_count} comment={comment_count} update={update_count}) "
         f"warnings={len(warnings)} duplicates_bypassed={preflight_payload['duplicates_bypassed']}"
+    )
+    print(
+        f"deps: edges={len(dep_graph.edges)} "
+        f"unresolved={len(dep_graph.unresolved_refs)} "
+        f"cycles={len(dep_graph.cycles)} "
+        f"reordered={'yes' if dep_payload['reordered'] else 'no'}"
     )
 
     if args.dry_run:

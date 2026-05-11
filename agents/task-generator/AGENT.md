@@ -1,9 +1,9 @@
 ---
 name: task-generator
-description: Convert one Plane spec page into a planned epic-story-task hierarchy, write it to Plane, then mirror it to Grava in the target repo. Phase 4 (current) adds Plane-side reconciliation — re-runs detect existing items, diff against the spec, and skip / patch / create per item; orphans flagged but never deleted. Every non-`--dry-run` invocation requires explicit operator approval per turn.
+description: Convert one Plane spec page into a planned epic-story-task hierarchy, analyze dependencies between epics, reorder topologically, write to Plane, then mirror to Grava in the target repo. Phase 5 (current) adds the dep analyzer — `> Depends on:` / `> Blocks:` / `> After:` blockquotes in epic bodies become a directed graph; cycles halt with exit 7; epics get created in dep order. Phase 4 reconciliation still applies. Every non-`--dry-run` invocation requires explicit operator approval per turn.
 ---
 
-# task-generator (Phase 4)
+# task-generator (Phase 5)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), then mirrors
@@ -38,10 +38,20 @@ Step 4: python3 agents/task-generator/cli/preflight.py <project_id> <page_id> --
 
 Step 5: python3 agents/task-generator/cli/parse.py --work-dir "$WORK_DIR"
 
+Step 5b: cli/run.py invokes the dependency analyzer inline after parse.
+         It strips `> Depends on:` / `> Blocks:` / `> After:` blockquotes
+         from each epic, builds an edge list, runs cycle detection, and
+         (unless --no-dep-reorder) reorders epics topologically.
+         Artifact: <work_dir>/dep_graph.json.
+         # exit 7 → cycle detected (use --allow-dep-cycles to continue)
+         #          OR --strict-deps + unresolved ref(s)
+
 Step 6: PREVIEW=$(python3 agents/task-generator/cli/render.py --work-dir "$WORK_DIR" --target-repo "$REPO_PATH")
 
 Step 7: Read("$PREVIEW") and surface a one-line summary plus the preview path
-        to the operator.
+        to the operator. The master preview now carries a `## Dependencies`
+        section showing detected edges, cycles, and the topological
+        creation order.
 ```
 
 Or, single-shot:
@@ -175,5 +185,7 @@ Anything else requires operator confirmation.
 | `grava.py` exit 5 | Partial Grava mirror (one op failed) | Surface failed_op; offer resume OR rollback (`--on-failure rollback`). |
 | `grava.py` exit 6 | Grava rollback completed | "Dropped N Grava items; Plane state untouched." |
 | `report.grava_anomalies` non-empty | Multiple Grava issues share a `plane:<seq>` label | Surface the anomaly list; operator resolves manually in Grava. |
+| `run.py` exit 7 (cycle) | Epic dep cycle in spec | Quote the cycle path from stderr; ask whether to fix the spec or pass `--allow-dep-cycles` (skips reorder). |
+| `run.py` exit 7 (unresolved + `--strict-deps`) | `> Depends on:` ref didn't match any epic | List the unresolved refs; ask the operator to fix the spec or drop `--strict-deps`. |
 | Non-200 from `fetch.py` | Bad page id or auth | Surface the status + URL. |
 | Missing creds | `~/.config/plane/config.json` absent | Point at `setup.sh`. |
