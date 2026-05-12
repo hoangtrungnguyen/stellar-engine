@@ -56,6 +56,11 @@ def main() -> int:
                     help="Continue when a cycle is detected (skips reorder).")
     ap.add_argument("--strict-deps", action="store_true",
                     help="Fail when a dependency ref cannot be resolved.")
+    ap.add_argument(
+        "--no-plane-relations", action="store_true",
+        help="Skip Phase 6 — don't post Plane `blocking` relations even if "
+             "dep_graph.json exists.",
+    )
     args = ap.parse_args()
 
     # Step 1: resolve repo (clone if missing)
@@ -351,7 +356,7 @@ def main() -> int:
             return 0
 
     import write as write_cli
-    sys.argv = [
+    write_argv = [
         "write.py",
         "--work-dir", str(work_dir),
         "--target-repo", str(mapping.repo),
@@ -359,6 +364,9 @@ def main() -> int:
         "--on-failure", args.on_failure,
         "--yes",
     ]
+    if args.no_plane_relations:
+        write_argv.append("--no-plane-relations")
+    sys.argv = write_argv
     plane_rc = write_cli.main()
     if plane_rc != 0 or args.no_grava:
         return plane_rc

@@ -1,4 +1,4 @@
-# task-generator (Phase 4)
+# task-generator (Phase 6)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), and mirrors
@@ -248,7 +248,7 @@ Intermediate JSON lands at
 - **Phase 4:** Plane-side reconciliation — sentinel label per spec page,
   preview-time diffs (`create / update / no_change / orphan`), writer
   honors verdicts, `type_marker → priority/label` mapping.
-- **Phase 5 (current):** epic dependency analysis. Operator declares
+- **Phase 5:** epic dependency analysis. Operator declares
   `> Depends on:` / `> Blocks:` / `> After:` blockquotes inside each epic
   body; the analyzer strips them, builds a directed graph, detects cycles,
   and topologically reorders epics so prerequisites are created in Plane
@@ -259,7 +259,16 @@ Intermediate JSON lands at
   (idempotent — duplicate edges are no-ops). Per-edge state is checkpointed
   in `grava_state.dep_edges_posted` so resume runs skip already-posted
   edges.
-- **Phase 6+ (future):** bidirectional drift (Grava→Plane), Plane
-  work-item-relations (encode the dep edges natively in Plane), LLM-assisted
+- **Phase 6 (current):** Plane-side relation mirror. Same `dep_graph.json`
+  drives a parallel Plane API mirror inside `plane_writer.execute()`. For
+  each resolved edge, the writer GETs the source's
+  `/issues/{src}/relations/` and POSTs `{"relation_type": "blocking",
+  "issues": [<dst>]}` if `dst` isn't already in `blocking`. Plane auto-
+  creates the bidirectional `blocked_by` inverse on the dst side. Per-edge
+  state lives in `state.plane_relations_posted` and report counts in
+  `report.plane_relations_created` / `plane_relations_skipped`. Suppress
+  with `--no-plane-relations`.
+- **Phase 7+ (future):** bidirectional drift (Grava→Plane), LLM-assisted
   dep inference when no explicit markup exists, orphan remediation flows,
+  finer-grained Plane relation types (`start_after`, `relates_to`, etc.),
   sub-page expansion when Plane ships the API.

@@ -153,6 +153,44 @@ class PlaneClient:
             json={"comment_html": comment_html},
         )
 
+    # ── Relations (Phase 6 — `blocking` mirror of analyzer dep edges) ──
+    def list_relations(self, project_id: str, issue_id: str) -> dict:
+        """GET /issues/{id}/relations/
+
+        Returns dict with relation-type buckets:
+        ``{"blocking": [...], "blocked_by": [...], "start_after": [...],
+        "start_before": [...], "finish_after": [...], "finish_before": [...],
+        "relates_to": [...], "duplicate": [...]}``. Each list contains
+        target issue UUIDs (strings).
+        """
+        data = self._request(
+            "GET", f"projects/{project_id}/issues/{issue_id}/relations/"
+        )
+        return data if isinstance(data, dict) else {}
+
+    def add_relation(
+        self,
+        project_id: str,
+        src_issue_id: str,
+        relation_type: str,
+        dst_issue_ids: list[str],
+    ) -> list[dict]:
+        """POST /issues/{src}/relations/ — server returns list of relation rows.
+
+        Plane auto-creates the bidirectional inverse (e.g. POSTing
+        ``blocking`` from src to dst also adds ``blocked_by`` from dst's view).
+        """
+        resp = self._request(
+            "POST",
+            f"projects/{project_id}/issues/{src_issue_id}/relations/",
+            json={"relation_type": relation_type, "issues": dst_issue_ids},
+        )
+        if isinstance(resp, list):
+            return resp
+        if isinstance(resp, dict):
+            return [resp]
+        return []
+
     # ── Labels ───────────────────────────────────────
     def list_labels(self, project_id: str) -> list[dict]:
         data = self._request("GET", f"projects/{project_id}/labels/")

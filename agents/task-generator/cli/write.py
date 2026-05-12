@@ -54,6 +54,11 @@ def main() -> int:
     ap.add_argument("--on-failure", choices=["prompt", "rollback", "abort"], default="prompt")
     ap.add_argument("--yes", action="store_true",
                     help="Skip the pre-write confirmation prompt.")
+    ap.add_argument(
+        "--no-plane-relations", action="store_true",
+        help="Skip Phase 6 — don't post Plane `blocking` relations even if "
+             "dep_graph.json exists in the work dir.",
+    )
     ap.add_argument("--client-factory", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
 
@@ -167,6 +172,22 @@ def main() -> int:
 
     report_path = args.target_repo / "runs" / "reports" / f"{run_id}.json"
 
+    # Phase 6: load dep_graph.json (written by cli/run.py's analyzer step) so
+    # plane_writer can mirror analyzer edges into Plane `blocking` relations.
+    dep_edges: list[dict] = []
+    if not args.no_plane_relations:
+        dep_path = work_dir / "dep_graph.json"
+        if dep_path.exists():
+            try:
+                dep_blob = json.loads(dep_path.read_text(encoding="utf-8"))
+                dep_edges = dep_blob.get("resolved_edges", []) or []
+            except json.JSONDecodeError as e:
+                print(
+                    f"WARNING: could not parse dep_graph.json ({e}); "
+                    f"skipping Plane relations.",
+                    file=sys.stderr,
+                )
+
     report = plane_writer.execute(
         plan, client, state, project_id, type_map,
         state_path=state_path,
@@ -174,6 +195,7 @@ def main() -> int:
         on_failure=args.on_failure,
         label_map=label_map,
         diff=diff,
+        dep_edges=dep_edges,
     )
 
     print(f"report: {report_path}")
@@ -181,6 +203,8 @@ def main() -> int:
         f"summary: created={len(report.plane_created)} "
         f"comments={len(report.plane_comments)} "
         f"updated={len(report.plane_updated)} "
+        f"relations_created={len(report.plane_relations_created)} "
+        f"relations_skipped={len(report.plane_relations_skipped)} "
         f"failed={'yes' if report.failed_op else 'no'} "
         f"rolled_back={report.rolled_back}"
     )

@@ -1,9 +1,9 @@
 ---
 name: task-generator
-description: Convert one Plane spec page into a planned epic-story-task hierarchy, analyze dependencies between epics, reorder topologically, write to Plane, then mirror to Grava in the target repo. Phase 5 (current) adds the dep analyzer — `> Depends on:` / `> Blocks:` / `> After:` blockquotes in epic bodies become a directed graph; cycles halt with exit 7; epics get created in dep order. Phase 4 reconciliation still applies. Every non-`--dry-run` invocation requires explicit operator approval per turn.
+description: Convert one Plane spec page into a planned epic-story-task hierarchy, analyze dependencies between epics, reorder topologically, write to Plane (with `blocking` relations), then mirror to Grava in the target repo. Phase 6 (current) adds the Plane relation mirror — analyzer edges land as `blocking`/`blocked_by` rows on Plane work items, parallel to the Grava `dep` mirror. Phases 4–5 (reconciliation, dep analyzer) still apply. Every non-`--dry-run` invocation requires explicit operator approval per turn.
 ---
 
-# task-generator (Phase 5)
+# task-generator (Phase 6)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), then mirrors
@@ -68,6 +68,13 @@ python3 agents/task-generator/cli/write.py \
 ```
 
 After it succeeds, read the report at `<repo>/runs/reports/<run_id>.json`.
+
+If `<work_dir>/dep_graph.json` exists (it does whenever cli/run.py ran the
+Phase 5 analyzer), Plane writes are followed by Plane `blocking` relation
+posts inside `plane_writer.execute()`. The relations mirror the analyzer
+edges 1:1 (server auto-creates the inverse `blocked_by` pair). Idempotent:
+each src.blocking list is GET'd before the POST, and `state.plane_relations_posted`
+is checkpointed per edge. Suppress with `--no-plane-relations`.
 
 ### Phase C — Grava mirror (only after Phase B succeeds + explicit approval)
 
@@ -141,6 +148,7 @@ or auto-deletes — operator decides.
   in non-interactive contexts; use `--on-failure abort` if you need a clean
   non-interactive failure mode and surface the partial state.
 - Never bypass `--no-grava` if the operator explicitly passed it.
+- Never bypass `--no-plane-relations` if the operator explicitly passed it.
 - Never run `grava init` automatically — it adds `.worktree/`, modifies
   `.gitignore`, and writes `.claude/settings.json`. Surface the failure and
   let the operator initialise.

@@ -126,6 +126,8 @@ class RunReport:
     grava_deps_created: list[dict] = field(default_factory=list)
     grava_deps_skipped: list[dict] = field(default_factory=list)
     grava_commit_hash: str | None = None
+    plane_relations_created: list[dict] = field(default_factory=list)
+    plane_relations_skipped: list[dict] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
     spec_page_id: str = ""
@@ -144,6 +146,7 @@ class RunState:
     completed_op_indices: list[int] = field(default_factory=list)
     ref_to_uuid: dict[str, str] = field(default_factory=dict)
     ref_to_sequence_id: dict[str, int] = field(default_factory=dict)
+    plane_relations_posted: list[str] = field(default_factory=list)
     failed_op_index: int | None = None
     failure_detail: str | None = None
     rolled_back: bool = False
