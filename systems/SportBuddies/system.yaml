@@ -9,3 +9,15 @@ projects:
     repo_name: sport-buddies-web
     git_url: https://github.com/hoangtrungnguyen/sport-buddies-web.git
     workspace_prefix: WEBINTRO
+
+# Grava status → Plane state name mapping, keyed by Plane project UUID.
+# The sync helper resolves UUIDs via PlaneClient.list_states() at runtime.
+# Missing keys fall back to Plane state group:
+#   open → "unstarted" or "backlog"
+#   in_progress → "started"
+#   closed → "completed" or "cancelled"
+plane_state_map:
+  "8af0f117-1dd0-4bfe-8db8-ff131d865534":
+    open:        "Todo"
+    in_progress: "In Progress"
+    closed:      "Done"

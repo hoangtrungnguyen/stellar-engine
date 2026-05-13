@@ -204,3 +204,28 @@ class PlaneClient:
             f"projects/{project_id}/labels/",
             json={"name": name, "color": color},
         )
+
+    # ── States ───────────────────────────────────────
+    def list_states(self, project_id: str) -> list[dict]:
+        """GET /workspaces/{ws}/projects/{id}/states/
+
+        Returns list of dicts: ``[{id, name, group, color, sequence, ...}, ...]``.
+        ``group`` is one of: ``backlog | unstarted | started | completed | cancelled``.
+        """
+        data = self._request("GET", f"projects/{project_id}/states/")
+        if isinstance(data, list):
+            return data
+        return data.get("results", [])
+
+    # ── Members ──────────────────────────────────────
+    def list_members(self) -> list[dict]:
+        """GET /workspaces/{ws}/members/
+
+        Returns workspace member rows. Shape (Plane-version dependent):
+        ``[{member: {id, display_name, email, ...}, role, ...}, ...]`` or flat
+        ``[{id, display_name, email, ...}, ...]``. Callers handle both.
+        """
+        data = self._request("GET", "members/")
+        if isinstance(data, list):
+            return data
+        return data.get("results", [])
