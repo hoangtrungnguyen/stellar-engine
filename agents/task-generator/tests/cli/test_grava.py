@@ -244,3 +244,103 @@ def test_grava_missing_workdir_files_exit_1(monkeypatch, tmp_path, capsys):
     ])
     assert rc == 1
     assert "missing required file" in err
+
+
+def test_grava_forwards_dep_edges_from_dep_graph_json(monkeypatch, tmp_path, capsys):
+    work_dir = _seed_workdir(tmp_path)
+    (tmp_path / ".grava.yaml").write_text("dummy: 1")
+
+    # Stage a dep_graph.json with one resolved edge.
+    (work_dir / "dep_graph.json").write_text(json.dumps({
+        "edges": [{"src_epic_idx": 0, "dst_epic_idx": 0, "source": "depends_on", "raw_ref": "self"}],
+        "resolved_edges": [{
+            "src_ref_key": "epic:0",
+            "dst_ref_key": "epic:0",
+            "src_title": "E0",
+            "dst_title": "E0",
+            "source": "depends_on",
+            "raw_ref": "E0",
+            "type": "blocks",
+        }],
+        "unresolved_refs": [],
+        "cycles": [],
+        "topo_order": [0],
+        "original_order": [0],
+        "reordered": True,
+        "epic_titles": ["E0"],
+    }))
+
+    captured = {"dep_edges": None}
+    import grava_writer as gw
+    original = gw.execute
+
+    def patched(*args, **kwargs):
+        captured["dep_edges"] = kwargs.get("dep_edges")
+        kwargs["dep_edges"] = []  # don't actually post — keep test fast
+        # Provide a fake subprocess.run so the rest of the writer succeeds
+        from types import SimpleNamespace
+        create_ids = ["g-E", "g-S", "g-T"]
+
+        def fake_run(cmd, **kw):
+            sub = cmd[1] if len(cmd) > 1 else ""
+            if sub == "list":
+                return SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")
+            if sub in ("create", "subtask"):
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"id": create_ids.pop(0)}), stderr="")
+            if sub == "label":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"id": cmd[2]}), stderr="")
+            if sub == "commit":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"hash": "deadbeef"}), stderr="")
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        kwargs["run_subprocess"] = fake_run
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gw, "execute", patched)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        "--work-dir", str(work_dir), "--target-repo", str(tmp_path), "--yes",
+        "--client-factory", "tests.cli.test_grava._fake_factory",
+    ])
+    assert rc == 0
+    assert captured["dep_edges"] is not None
+    assert len(captured["dep_edges"]) == 1
+    assert captured["dep_edges"][0]["src_ref_key"] == "epic:0"
+    assert "deps_created=" in out
+
+
+def test_grava_no_dep_graph_json_passes_empty_list(monkeypatch, tmp_path, capsys):
+    work_dir = _seed_workdir(tmp_path)
+    (tmp_path / ".grava.yaml").write_text("dummy: 1")
+    # Intentionally do NOT write dep_graph.json.
+
+    captured = {"dep_edges": None}
+    import grava_writer as gw
+    original = gw.execute
+
+    def patched(*args, **kwargs):
+        captured["dep_edges"] = kwargs.get("dep_edges")
+        from types import SimpleNamespace
+        create_ids = ["g-E", "g-S", "g-T"]
+
+        def fake_run(cmd, **kw):
+            sub = cmd[1] if len(cmd) > 1 else ""
+            if sub == "list":
+                return SimpleNamespace(returncode=0, stdout=json.dumps([]), stderr="")
+            if sub in ("create", "subtask"):
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"id": create_ids.pop(0)}), stderr="")
+            if sub == "label":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"id": cmd[2]}), stderr="")
+            if sub == "commit":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"hash": "deadbeef"}), stderr="")
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        kwargs["run_subprocess"] = fake_run
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gw, "execute", patched)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        "--work-dir", str(work_dir), "--target-repo", str(tmp_path), "--yes",
+        "--client-factory", "tests.cli.test_grava._fake_factory",
+    ])
+    assert rc == 0
+    assert captured["dep_edges"] == []

@@ -9,6 +9,7 @@ from pathlib import Path
 from ir import (
     AddComment,
     CreateWorkItem,
+    DependencyGraph,
     EpicNode,
     Op,
     ParseWarning,
@@ -157,6 +158,7 @@ def plan_from_cached(
     duplicates_bypassed: list[dict] | None = None,
     spec_page_id: str = "",
     existing_plane: list[dict] | None = None,
+    dep_graph: DependencyGraph | None = None,
 ) -> RunPlan:
     """Build the RunPlan from a list of epics. Phase 1 tolerates missing types.
 
@@ -250,6 +252,7 @@ def plan_from_cached(
         page_title=page_title,
         duplicates_bypassed=duplicates_bypassed or [],
         diff=diff,
+        dep_graph=dep_graph,
     )
 
     return RunPlan(
@@ -338,6 +341,20 @@ def _related_update(ref_key: str, refs: list[str]) -> UpdateWorkItem:
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
+def _title_for(
+    original_idx: int,
+    epics: list[EpicNode],
+    dep_graph: DependencyGraph,
+) -> str:
+    """Resolve an original (pre-reorder) epic index to its title."""
+    titles = dep_graph.epic_titles_original
+    if 0 <= original_idx < len(titles):
+        return titles[original_idx]
+    if 0 <= original_idx < len(epics):
+        return epics[original_idx].title
+    return f"(epic {original_idx})"
+
+
 def _slugify(title: str) -> str:
     slug = _SLUG_RE.sub("-", (title or "epic").lower()).strip("-")
     return slug[:60] or "epic"
@@ -353,6 +370,7 @@ def _render_previews(
     page_title: str,
     duplicates_bypassed: list[dict],
     diff=None,
+    dep_graph: DependencyGraph | None = None,
 ) -> tuple[Path, list[Path]]:
     """Render one preview per epic + a master overview. Return (master, [per_epic])."""
     preview_dir = target_repo / "runs" / "preview" / run_id
@@ -391,6 +409,45 @@ def _render_previews(
         lines.append("")
         for w in warnings:
             lines.append(f"- **{w.kind}**: {w.detail}")
+        lines.append("")
+
+    if dep_graph is not None and (
+        dep_graph.edges or dep_graph.cycles or dep_graph.unresolved_refs
+    ):
+        lines.append("## Dependencies")
+        lines.append("")
+        lines.append(
+            f"- Edges: {len(dep_graph.edges)} | "
+            f"Cycles: {len(dep_graph.cycles)} | "
+            f"Unresolved refs: {len(dep_graph.unresolved_refs)}"
+        )
+        if dep_graph.cycles:
+            lines.append("")
+            lines.append("**⚠️ Cycle(s) detected — topological reorder skipped:**")
+            for cyc in dep_graph.cycles:
+                names = " → ".join(_title_for(i, epics, dep_graph) for i in cyc + [cyc[0]])
+                lines.append(f"- {names}")
+        if dep_graph.edges:
+            lines.append("")
+            lines.append("**Edges (prerequisite → dependent):**")
+            for e in dep_graph.edges:
+                src = _title_for(e.src_epic_idx, epics, dep_graph)
+                dst = _title_for(e.dst_epic_idx, epics, dep_graph)
+                lines.append(f"- `{src}` → `{dst}`  _(via `{e.source}: {e.raw_ref}`)_")
+        if dep_graph.unresolved_refs:
+            lines.append("")
+            lines.append("**Unresolved refs (edge dropped):**")
+            for u in dep_graph.unresolved_refs:
+                lines.append(
+                    f"- epic {u['epic_idx'] + 1} (`{u['epic_title']}`) → "
+                    f"`{u['kind']} {u['raw_ref']}`"
+                )
+        if not dep_graph.cycles and dep_graph.edges:
+            lines.append("")
+            lines.append(
+                "**Creation order (topological):** "
+                + ", ".join(f"`{e.title}`" for e in epics)
+            )
         lines.append("")
 
     if diff is not None:
@@ -455,6 +512,10 @@ def _render_epic(idx: int, epic: EpicNode, type_map: dict[str, str], all_ops: li
     lines.append(f"- type_id: `{type_map.get('epic') or '(none — type missing)'}`")
     if epic.related_refs:
         lines.append(f"- related: {', '.join(epic.related_refs)}")
+    if epic.dependencies:
+        lines.append(f"- depends on: {', '.join(epic.dependencies)}")
+    if epic.blocks:
+        lines.append(f"- blocks: {', '.join(epic.blocks)}")
     lines.append("")
 
     if epic.description_md:

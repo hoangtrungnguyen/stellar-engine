@@ -77,6 +77,7 @@ def test_dataclasses_construct():
     )
     assert state.completed_op_indices == []
     assert state.ref_to_uuid == {}
+    assert state.plane_relations_posted == []
     assert state.failed_op_index is None
 
     g = GravaState(
@@ -92,3 +93,5 @@ def test_dataclasses_construct():
     assert report.grava_updated == []
     assert report.grava_anomalies == []
     assert report.grava_commit_hash is None
+    assert report.plane_relations_created == []
+    assert report.plane_relations_skipped == []

@@ -44,6 +44,9 @@ class FakeClient:
         self._fail_on = fail_on or {}  # {(method_name, occurrence_index): exc_to_raise}
         self._counts = {}
         self.created = []  # list of {payload, returned_id}
+        # Phase 6: per-issue relations state. Keyed by src issue uuid →
+        # {blocking: [...], blocked_by: [...], ...}
+        self.relations: dict[str, dict] = {}
 
     def _maybe_fail(self, name):
         i = self._counts.get(name, 0)
@@ -76,6 +79,29 @@ class FakeClient:
     def delete_work_item(self, project_id, issue_id):
         self._maybe_fail("delete_work_item")
         self.calls.append(("delete", project_id, issue_id))
+
+    # ── Phase 6 relations API ──
+    def list_relations(self, project_id, issue_id):
+        self._maybe_fail("list_relations")
+        self.calls.append(("list_relations", project_id, issue_id))
+        return self.relations.get(issue_id, {
+            "blocking": [], "blocked_by": [],
+            "start_after": [], "start_before": [],
+            "finish_after": [], "finish_before": [],
+            "relates_to": [], "duplicate": [],
+        })
+
+    def add_relation(self, project_id, src_issue_id, relation_type, dst_issue_ids):
+        self._maybe_fail("add_relation")
+        self.calls.append(("add_relation", project_id, src_issue_id, relation_type, list(dst_issue_ids)))
+        bucket = self.relations.setdefault(src_issue_id, {
+            "blocking": [], "blocked_by": [],
+            "start_after": [], "start_before": [],
+            "finish_after": [], "finish_before": [],
+            "relates_to": [], "duplicate": [],
+        })
+        bucket.setdefault(relation_type, []).extend(dst_issue_ids)
+        return [{"id": d} for d in dst_issue_ids]
 
 
 def _hierarchy_ops():
@@ -497,9 +523,196 @@ def test_load_state_round_trip(tmp_path):
     state = _make_state(tmp_path, 5)
     state.completed_op_indices = [0, 1]
     state.ref_to_uuid = {"epic:0": "wi-0"}
+    state.plane_relations_posted = ["epic:0->epic:1:blocking"]
     state_path = tmp_path / "state.json"
     plane_writer._atomic_write_state(state, state_path)
     loaded = plane_writer.load_state(state_path)
     assert loaded.completed_op_indices == [0, 1]
     assert loaded.ref_to_uuid == {"epic:0": "wi-0"}
+    assert loaded.plane_relations_posted == ["epic:0->epic:1:blocking"]
     assert loaded.run_id == "run01"
+
+
+# ── Phase 6: Plane `blocking` relation mirror ──
+
+def _epic_only_ops(n: int = 4):
+    """Return n epic-only CreateWorkItem ops with ref_keys epic:0..epic:n-1."""
+    return [
+        CreateWorkItem(
+            node_kind="epic", title=f"E{i}", description_html="",
+            type_id_key="epic", parent_ref=None, ref_key=f"epic:{i}",
+        )
+        for i in range(n)
+    ]
+
+
+def _dep_edges_chain():
+    """3 edges: epic:0 -> epic:1, epic:0 -> epic:2, epic:2 -> epic:3."""
+    return [
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+         "src_title": "E0", "dst_title": "E1",
+         "source": "depends_on", "raw_ref": "E0"},
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:2",
+         "src_title": "E0", "dst_title": "E2",
+         "source": "depends_on", "raw_ref": "E0"},
+        {"src_ref_key": "epic:2", "dst_ref_key": "epic:3",
+         "src_title": "E2", "dst_title": "E3",
+         "source": "depends_on", "raw_ref": "E2"},
+    ]
+
+
+def test_relations_posted_after_creates(tmp_path):
+    """Happy path: 4 creates → 3 list_relations + 3 add_relation calls."""
+    plan = _make_plan(_epic_only_ops(4))
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    client = FakeClient()
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=_dep_edges_chain(),
+    )
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    assert len(add_calls) == 3
+    # All POSTs are blocking type
+    assert all(c[3] == "blocking" for c in add_calls)
+    # Posted edges go src wi-0 → dst wi-1, wi-0 → wi-2, wi-2 → wi-3
+    posted = [(c[2], c[4][0]) for c in add_calls]
+    assert posted == [("wi-0", "wi-1"), ("wi-0", "wi-2"), ("wi-2", "wi-3")]
+    assert len(report.plane_relations_created) == 3
+    assert all(e["created"] is True for e in report.plane_relations_created)
+    assert state.plane_relations_posted == sorted([
+        "epic:0->epic:1:blocking",
+        "epic:0->epic:2:blocking",
+        "epic:2->epic:3:blocking",
+    ])
+    assert report.plane_relations_skipped == []
+
+
+def test_relation_skipped_when_already_in_blocking(tmp_path):
+    """Server-side dedup: if dst already in src.blocking, no POST, created=False."""
+    plan = _make_plan(_epic_only_ops(4))
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    client = FakeClient()
+    # Pre-seed: wi-0 already blocks wi-1 (will be discovered after epic:0 + epic:1
+    # creates populate state.ref_to_uuid). Pre-seeding by uuid works because
+    # FakeClient assigns deterministic ids wi-0, wi-1, wi-2, wi-3 in order.
+    client.relations["wi-0"] = {
+        "blocking": ["wi-1"], "blocked_by": [],
+        "start_after": [], "start_before": [],
+        "finish_after": [], "finish_before": [],
+        "relates_to": [], "duplicate": [],
+    }
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=_dep_edges_chain(),
+    )
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    # Only edges 2 and 3 trigger POST; edge 1 (wi-0 → wi-1) was already there
+    assert len(add_calls) == 2
+    posted_dst = [c[4][0] for c in add_calls]
+    assert "wi-1" not in posted_dst
+    # Report still contains 3 entries, but the first has created=False
+    assert len(report.plane_relations_created) == 3
+    by_dst = {e["dst_ref_key"]: e for e in report.plane_relations_created}
+    assert by_dst["epic:1"]["created"] is False
+    assert by_dst["epic:2"]["created"] is True
+    assert by_dst["epic:3"]["created"] is True
+
+
+def test_relation_resume_skips_already_posted(tmp_path):
+    """Pre-populated state.plane_relations_posted → no list_relations + no add_relation."""
+    plan = _make_plan(_epic_only_ops(4))
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    state.plane_relations_posted = sorted([
+        "epic:0->epic:1:blocking",
+        "epic:0->epic:2:blocking",
+        "epic:2->epic:3:blocking",
+    ])
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=_dep_edges_chain(),
+    )
+    list_calls = [c for c in client.calls if c[0] == "list_relations"]
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    assert list_calls == []
+    assert add_calls == []
+
+
+def test_relation_skipped_when_uuid_missing(tmp_path):
+    """Edge ref_key not present in state.ref_to_uuid → skipped w/ reason."""
+    plan = _make_plan(_epic_only_ops(2))  # only epic:0 + epic:1 created
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    client = FakeClient()
+    edges = [
+        # Valid: both ref_keys will resolve
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+         "source": "depends_on", "raw_ref": "E0"},
+        # Invalid: dst ref_key doesn't exist (no epic:2 in plan)
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:2",
+         "source": "depends_on", "raw_ref": "E0"},
+    ]
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=edges,
+    )
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    assert len(add_calls) == 1
+    assert len(report.plane_relations_created) == 1
+    assert len(report.plane_relations_skipped) == 1
+    skipped = report.plane_relations_skipped[0]
+    assert skipped["dst_ref_key"] == "epic:2"
+    assert "unresolved plane uuid" in skipped["reason"]
+
+
+def test_no_dep_edges_no_relation_calls(tmp_path):
+    """execute() w/ dep_edges=None → no list_relations + no add_relation calls."""
+    plan = _make_plan(_epic_only_ops(4))
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=None,
+    )
+    list_calls = [c for c in client.calls if c[0] == "list_relations"]
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    assert list_calls == []
+    assert add_calls == []
+
+
+def test_relation_list_failure_records_skipped_reason(tmp_path):
+    """list_relations raising → edge recorded in skipped w/ failure reason."""
+    plan = _make_plan(_epic_only_ops(2))
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    client = FakeClient(fail_on={("list_relations", 0): RuntimeError("network down")})
+    edges = [
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+         "source": "depends_on", "raw_ref": "E0"},
+    ]
+    report = plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        dep_edges=edges,
+    )
+    add_calls = [c for c in client.calls if c[0] == "add_relation"]
+    assert add_calls == []
+    assert len(report.plane_relations_skipped) == 1
+    assert "network down" in report.plane_relations_skipped[0]["reason"]
+    # The main run still succeeded — relation failure is non-fatal per design.
+    assert report.failed_op is None

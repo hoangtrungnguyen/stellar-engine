@@ -224,6 +224,150 @@ def test_run_target_repo_override(monkeypatch, tmp_path, capsys):
     assert any(preview_dir.glob("*.master.preview.md"))
 
 
+DEP_PAGE_HTML = (
+    "<h1>Page</h1>"
+    "<h2>Schema cleanup</h2><p>prep work</p>"
+    "<h2>Auth migration</h2>"
+    "<blockquote>Depends on: Schema cleanup</blockquote>"
+)
+
+CYCLE_PAGE_HTML = (
+    "<h1>Page</h1>"
+    "<h2>A</h2><blockquote>Depends on: B</blockquote>"
+    "<h2>B</h2><blockquote>Depends on: A</blockquote>"
+)
+
+
+def test_run_writes_dep_graph_and_reorders(monkeypatch, tmp_path, capsys):
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    class DepClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {"name": "DepPage", "description_html": DEP_PAGE_HTML}
+
+    monkeypatch.setattr(run_cli, "PlaneClient", DepClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "rundeps",
+    ])
+    assert rc == 0
+    work_dir = target / "runs" / "work" / "rundeps"
+    assert (work_dir / "dep_graph.json").exists()
+    blob = json.loads((work_dir / "dep_graph.json").read_text())
+    assert blob["reordered"] is True
+    assert blob["epic_titles"] == ["Schema cleanup", "Auth migration"]
+    assert any(
+        e["src_epic_idx"] == 0 and e["dst_epic_idx"] == 1
+        for e in blob["edges"]
+    )
+    # resolved_edges uses post-reorder ref_keys (Schema is now at index 0,
+    # Auth at index 1 — same as original here since markdown order matched).
+    assert blob["resolved_edges"]
+    assert blob["resolved_edges"][0]["src_ref_key"] == "epic:0"
+    assert blob["resolved_edges"][0]["dst_ref_key"] == "epic:1"
+
+
+def test_run_resolved_edges_post_reorder(monkeypatch, tmp_path, capsys):
+    """When markdown order disagrees with topo order, resolved_edges must
+    point at the post-reorder ref_keys, not the original ones."""
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    # Markdown order: Auth then Schema; Auth depends on Schema.
+    # Topo order: Schema (idx 0 post-reorder), Auth (idx 1 post-reorder).
+    REORDER_HTML = (
+        "<h1>Page</h1>"
+        "<h2>Auth migration</h2>"
+        "<blockquote>Depends on: Schema cleanup</blockquote>"
+        "<h2>Schema cleanup</h2><p>prep work</p>"
+    )
+
+    class ReorderClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {"name": "ReorderPage", "description_html": REORDER_HTML}
+
+    monkeypatch.setattr(run_cli, "PlaneClient", ReorderClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "runreorder",
+    ])
+    assert rc == 0
+    work_dir = target / "runs" / "work" / "runreorder"
+    blob = json.loads((work_dir / "dep_graph.json").read_text())
+    assert blob["reordered"] is True
+    # Schema comes first now.
+    assert blob["epic_titles"][0] == "Schema cleanup"
+    assert blob["epic_titles"][1] == "Auth migration"
+    # resolved_edges should point at Schema (epic:0) → Auth (epic:1).
+    assert len(blob["resolved_edges"]) == 1
+    edge = blob["resolved_edges"][0]
+    assert edge["src_ref_key"] == "epic:0"
+    assert edge["dst_ref_key"] == "epic:1"
+    assert edge["src_title"] == "Schema cleanup"
+    assert edge["dst_title"] == "Auth migration"
+
+
+def test_run_cycle_blocks_with_exit_7(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    class CycleClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {"name": "CyclePage", "description_html": CYCLE_PAGE_HTML}
+
+    monkeypatch.setattr(run_cli, "PlaneClient", CycleClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "runcycle",
+    ])
+    assert rc == 7
+    assert "cycle" in err.lower()
+
+
+def test_run_allow_dep_cycles_continues(monkeypatch, tmp_path, capsys):
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    class CycleClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {"name": "CyclePage", "description_html": CYCLE_PAGE_HTML}
+
+    monkeypatch.setattr(run_cli, "PlaneClient", CycleClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "runcycle-allow",
+        "--allow-dep-cycles",
+    ])
+    assert rc == 0
+    work_dir = target / "runs" / "work" / "runcycle-allow"
+    blob = json.loads((work_dir / "dep_graph.json").read_text())
+    assert blob["cycles"]
+
+
+def test_run_strict_deps_fails_on_unresolved(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    _setup_fakes(monkeypatch)
+
+    class UnresolvedClient(FakeClient):
+        def get_page(self, project_id, page_id):
+            return {
+                "name": "UnresolvedPage",
+                "description_html": (
+                    "<h1>Page</h1><h2>A</h2>"
+                    "<blockquote>Depends on: Nonexistent</blockquote>"
+                ),
+            }
+
+    monkeypatch.setattr(run_cli, "PlaneClient", UnresolvedClient)
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "page-A", "--dry-run", "--run-id", "runstrict",
+        "--strict-deps",
+    ])
+    assert rc == 7
+    assert "Unresolved" in err
+
+
 def test_run_propagates_duplicate_exit_3(monkeypatch, tmp_path, capsys):
     target = _setup_yaml_repo(monkeypatch, tmp_path)
     monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))

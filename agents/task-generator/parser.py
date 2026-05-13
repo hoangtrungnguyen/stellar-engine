@@ -192,6 +192,23 @@ def parse(
                 pending_target = "story"
                 continue
 
+            if level == 4:
+                if current_story is None:
+                    pending_lines.append(line)
+                    continue
+                flush()
+                title, type_marker = _strip_type_marker(text)
+                task = TaskNode(
+                    title=title,
+                    description_md="",
+                    type_marker=type_marker,
+                    related_refs=ref_re.findall(title),
+                )
+                current_story.tasks.append(task)
+                current_task = task
+                pending_target = "task"
+                continue
+
             pending_lines.append(line)
             continue
 

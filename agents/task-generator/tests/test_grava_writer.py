@@ -589,8 +589,171 @@ def test_load_state_round_trip(tmp_path):
     state = _make_grava_state(tmp_path, 3)
     state.ref_to_grava_id = {"epic:0": "g-1"}
     state.plane_comments_posted = ["epic:0"]
+    state.dep_edges_posted = ["epic:0->epic:1:blocks"]
     state_path = tmp_path / "g.json"
     grava_writer._atomic_write_state(state, state_path)
     loaded = grava_writer.load_state(state_path)
     assert loaded.ref_to_grava_id == {"epic:0": "g-1"}
     assert loaded.plane_comments_posted == ["epic:0"]
+    assert loaded.dep_edges_posted == ["epic:0->epic:1:blocks"]
+
+
+# ── Dep edges (Phase 5 mirror) ────────────────────────────────────────────────
+
+
+def _two_epic_plan():
+    return _make_plan([
+        CreateWorkItem(
+            node_kind="epic", title="Schema", description_html="<p>s</p>",
+            type_id_key="epic", parent_ref=None, ref_key="epic:0",
+        ),
+        CreateWorkItem(
+            node_kind="epic", title="Auth", description_html="<p>a</p>",
+            type_id_key="epic", parent_ref=None, ref_key="epic:1",
+        ),
+    ])
+
+
+def _two_epic_plane_state():
+    return _make_plane_state({
+        "epic:0": ("uS", 1),
+        "epic:1": ("uA", 2),
+    })
+
+
+def _exec_with_deps(plan, plane_state, target_repo, dep_edges, *,
+                    runner=None, state=None):
+    if runner is None:
+        runner = FakeRunner()
+    if state is None:
+        state = _make_grava_state(target_repo, len(plan.plane_ops))
+    return grava_writer.execute(
+        plan, plane_state, target_repo, FakePlaneClient(), PROJECT_ID,
+        SPEC_URL, WORKSPACE,
+        state=state,
+        state_path=target_repo / "grava_state.json",
+        report_path=target_repo / "report.json",
+        project_identifier=PROJECT_IDENT,
+        on_failure="abort",
+        input_fn=lambda _msg: "",
+        run_subprocess=runner,
+        dep_edges=dep_edges,
+    )
+
+
+def test_dep_edges_posted_after_creates(tmp_path):
+    target = _init_grava_dir(tmp_path)
+    runner = FakeRunner(default_create_id_seq=["g-S", "g-A"])
+    dep_edges = [{
+        "src_ref_key": "epic:0",
+        "dst_ref_key": "epic:1",
+        "type": "blocks",
+        "source": "depends_on",
+        "raw_ref": "Schema",
+    }]
+    report = _exec_with_deps(
+        _two_epic_plan(), _two_epic_plane_state(), target, dep_edges, runner=runner,
+    )
+
+    dep_calls = [c for c in runner.calls if c["cmd"][1] == "dep"]
+    assert len(dep_calls) == 1
+    # `grava dep <src> <dst> --type blocks --json`
+    assert dep_calls[0]["cmd"][2] == "g-S"
+    assert dep_calls[0]["cmd"][3] == "g-A"
+    assert "--type" in dep_calls[0]["cmd"]
+    assert "blocks" in dep_calls[0]["cmd"]
+
+    assert len(report.grava_deps_created) == 1
+    assert report.grava_deps_created[0]["src_grava_id"] == "g-S"
+    assert report.grava_deps_created[0]["dst_grava_id"] == "g-A"
+    assert report.grava_deps_created[0]["created"] is True
+    assert report.grava_deps_skipped == []
+
+
+def test_dep_edge_duplicate_treated_as_idempotent(tmp_path):
+    target = _init_grava_dir(tmp_path)
+
+    class DupRunner(FakeRunner):
+        def __call__(self, cmd, **kw):
+            self.calls.append({"cmd": list(cmd), "cwd": kw.get("cwd"), "env": kw.get("env")})
+            sub = cmd[1]
+            if sub == "dep":
+                # Mimic grava's duplicate primary key error path.
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout=json.dumps({
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": "failed to insert dependency: Error 1062 (HY000): duplicate primary key given: [g-S,g-A,blocks]",
+                        }
+                    }),
+                    stderr="",
+                )
+            return FakeRunner.__call__(self, cmd, **kw)
+
+    runner = DupRunner(default_create_id_seq=["g-S", "g-A"])
+    dep_edges = [{
+        "src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+        "type": "blocks", "source": "depends_on", "raw_ref": "Schema",
+    }]
+    report = _exec_with_deps(
+        _two_epic_plan(), _two_epic_plane_state(), target, dep_edges, runner=runner,
+    )
+
+    assert report.failed_op is None
+    assert len(report.grava_deps_created) == 1
+    assert report.grava_deps_created[0]["created"] is False  # already existed
+    # State recorded the edge so a resume run skips it.
+    state_blob = json.loads((target / "grava_state.json").read_text())
+    assert state_blob["dep_edges_posted"] == ["epic:0->epic:1:blocks"]
+
+
+def test_dep_edge_skipped_when_grava_id_missing(tmp_path):
+    target = _init_grava_dir(tmp_path)
+    runner = FakeRunner(default_create_id_seq=["g-S", "g-A"])
+    dep_edges = [
+        {
+            "src_ref_key": "epic:0", "dst_ref_key": "epic:99",  # never created
+            "type": "blocks", "source": "depends_on", "raw_ref": "Mystery",
+        }
+    ]
+    report = _exec_with_deps(
+        _two_epic_plan(), _two_epic_plane_state(), target, dep_edges, runner=runner,
+    )
+
+    dep_calls = [c for c in runner.calls if c["cmd"][1] == "dep"]
+    assert dep_calls == []
+    assert len(report.grava_deps_skipped) == 1
+    assert "unresolved" in report.grava_deps_skipped[0]["reason"].lower()
+    assert report.grava_deps_created == []
+
+
+def test_dep_edge_resume_skips_already_posted(tmp_path):
+    target = _init_grava_dir(tmp_path)
+    runner = FakeRunner(default_create_id_seq=["g-S", "g-A"])
+    state = _make_grava_state(target, 2)
+    state.dep_edges_posted = ["epic:0->epic:1:blocks"]
+    # Pre-populate ref_to_grava_id so the writer doesn't re-create.
+    state.ref_to_grava_id = {"epic:0": "g-S", "epic:1": "g-A"}
+    state.completed_op_indices = [0, 1]
+
+    dep_edges = [{
+        "src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+        "type": "blocks", "source": "depends_on", "raw_ref": "Schema",
+    }]
+    _exec_with_deps(
+        _two_epic_plan(), _two_epic_plane_state(), target, dep_edges,
+        runner=runner, state=state,
+    )
+    dep_calls = [c for c in runner.calls if c["cmd"][1] == "dep"]
+    assert dep_calls == []  # resume skipped the already-posted edge
+
+
+def test_no_dep_edges_no_dep_calls(tmp_path):
+    target = _init_grava_dir(tmp_path)
+    runner = FakeRunner(default_create_id_seq=["g-S", "g-A"])
+    _exec_with_deps(
+        _two_epic_plan(), _two_epic_plane_state(), target, [], runner=runner,
+    )
+    dep_calls = [c for c in runner.calls if c["cmd"][1] == "dep"]
+    assert dep_calls == []

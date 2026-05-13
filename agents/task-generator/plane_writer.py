@@ -66,6 +66,86 @@ def load_state(path: Path) -> RunState | None:
     return RunState(**data)
 
 
+# ── Phase 6: Plane relation mirror (parallel to Grava `_apply_dep_edges`) ──
+def _relation_key(src_ref: str, dst_ref: str, kind: str) -> str:
+    return f"{src_ref}->{dst_ref}:{kind}"
+
+
+def _apply_plane_relations(
+    dep_edges: list[dict],
+    state: RunState,
+    report: RunReport,
+    client,
+    project_id: str,
+    state_path: Path,
+) -> None:
+    """Walk dep_edges, POST `blocking` relation per edge.
+
+    Idempotent: GETs current src.blocking list before POST; if dst already
+    listed, records `created=False` w/o calling POST. State checkpoint
+    `plane_relations_posted` skips already-handled edges on resume. Skips
+    edges whose src or dst Plane uuid is unknown (e.g. create-side failure)
+    and surfaces in `report.plane_relations_skipped`.
+
+    Mirror of `grava_writer._apply_dep_edges`. Default relation type
+    `"blocking"` collapses all dependency-analyzer markup variants
+    (`> Depends on:` / `> Blocks:` / `> After:`) since they all express
+    blocking semantics at the epic level.
+    """
+    posted = set(state.plane_relations_posted)
+    for edge in dep_edges:
+        src_ref = edge.get("src_ref_key", "")
+        dst_ref = edge.get("dst_ref_key", "")
+        kind = "blocking"
+        key = _relation_key(src_ref, dst_ref, kind)
+        if key in posted:
+            continue
+        src_uuid = state.ref_to_uuid.get(src_ref)
+        dst_uuid = state.ref_to_uuid.get(dst_ref)
+        if not src_uuid or not dst_uuid:
+            report.plane_relations_skipped.append({
+                "src_ref_key": src_ref,
+                "dst_ref_key": dst_ref,
+                "type": kind,
+                "reason": (
+                    f"unresolved plane uuid (src={src_uuid or 'missing'} "
+                    f"dst={dst_uuid or 'missing'}); likely create-side failure."
+                ),
+            })
+            continue
+        try:
+            existing = client.list_relations(project_id, src_uuid)
+        except Exception as exc:  # noqa: BLE001
+            report.plane_relations_skipped.append({
+                "src_ref_key": src_ref,
+                "dst_ref_key": dst_ref,
+                "type": kind,
+                "reason": f"list_relations failed: {exc}",
+            })
+            continue
+        existing_blocking = (
+            existing.get("blocking", []) if isinstance(existing, dict) else []
+        )
+        if dst_uuid in existing_blocking:
+            created = False
+        else:
+            client.add_relation(project_id, src_uuid, kind, [dst_uuid])
+            created = True
+        posted.add(key)
+        state.plane_relations_posted = sorted(posted)
+        report.plane_relations_created.append({
+            "src_ref_key": src_ref,
+            "dst_ref_key": dst_ref,
+            "src_uuid": src_uuid,
+            "dst_uuid": dst_uuid,
+            "type": kind,
+            "raw_ref": edge.get("raw_ref"),
+            "source": edge.get("source"),
+            "created": created,
+        })
+        _atomic_write_state(state, state_path)
+
+
 def execute(
     plan: RunPlan,
     client,
@@ -80,6 +160,7 @@ def execute(
     input_fn=input,
     label_map: dict[str, str] | None = None,
     diff=None,
+    dep_edges: list[dict] | None = None,
 ) -> RunReport:
     report = RunReport(
         run_id=state.run_id,
@@ -116,6 +197,19 @@ def execute(
             exc, plan, client, project_id, state, report,
             create_order, state_path, report_path, on_failure, input_fn,
         )
+
+    # Phase 6: mirror analyzer dep edges into Plane `blocking` relations.
+    # Runs only after every op succeeded so state.ref_to_uuid is fully populated.
+    if dep_edges:
+        try:
+            _apply_plane_relations(
+                dep_edges, state, report, client, project_id, state_path,
+            )
+        except Exception as exc:  # noqa: BLE001 — non-fatal: log + continue.
+            print(
+                f"[plane_writer] _apply_plane_relations failed (non-fatal): {exc}",
+                file=sys.stderr,
+            )
 
     state.failed_op_index = None
     state.failure_detail = None

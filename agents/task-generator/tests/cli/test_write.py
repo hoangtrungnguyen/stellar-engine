@@ -225,3 +225,81 @@ def test_write_missing_workdir_files_exit_1(monkeypatch, tmp_path, capsys):
     ])
     assert rc == 1
     assert "missing required file" in err
+
+
+# ── Phase 6: dep_graph.json wiring ──
+
+def _stage_dep_graph(work_dir: Path, edges: list[dict]) -> None:
+    """Drop a dep_graph.json shaped like cli/run.py writes it."""
+    payload = {
+        "edges": [],
+        "resolved_edges": edges,
+        "unresolved_refs": [],
+        "cycles": [],
+        "topo_order": [],
+        "original_order": [],
+        "reordered": True,
+        "epic_titles": [],
+    }
+    (work_dir / "dep_graph.json").write_text(json.dumps(payload, indent=2))
+
+
+def test_write_loads_dep_graph_and_forwards_relations(monkeypatch, tmp_path, capsys):
+    work_dir = _seed_workdir(tmp_path)
+    edges = [
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+         "source": "depends_on", "raw_ref": "E0"},
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:2",
+         "source": "depends_on", "raw_ref": "E0"},
+    ]
+    _stage_dep_graph(work_dir, edges)
+
+    captured: dict = {}
+    real_execute = plane_writer.execute
+
+    def spy_execute(*args, **kwargs):
+        captured["dep_edges"] = kwargs.get("dep_edges")
+        return real_execute(*args, **kwargs)
+
+    monkeypatch.setattr(plane_writer, "execute", spy_execute)
+    rc, out, err = _run(monkeypatch, capsys, [
+        "--work-dir", str(work_dir), "--target-repo", str(tmp_path), "--yes",
+        "--client-factory", "tests.cli.test_write._fake_factory",
+    ])
+    assert rc == 0
+    assert captured["dep_edges"] == edges
+
+
+def test_write_no_plane_relations_flag_passes_empty_list(monkeypatch, tmp_path, capsys):
+    work_dir = _seed_workdir(tmp_path)
+    _stage_dep_graph(work_dir, [
+        {"src_ref_key": "epic:0", "dst_ref_key": "epic:1",
+         "source": "depends_on", "raw_ref": "E0"},
+    ])
+
+    captured: dict = {}
+    real_execute = plane_writer.execute
+
+    def spy_execute(*args, **kwargs):
+        captured["dep_edges"] = kwargs.get("dep_edges")
+        return real_execute(*args, **kwargs)
+
+    monkeypatch.setattr(plane_writer, "execute", spy_execute)
+    rc, out, err = _run(monkeypatch, capsys, [
+        "--work-dir", str(work_dir), "--target-repo", str(tmp_path), "--yes",
+        "--no-plane-relations",
+        "--client-factory", "tests.cli.test_write._fake_factory",
+    ])
+    assert rc == 0
+    assert captured["dep_edges"] == []
+
+
+def test_write_summary_shows_relation_counts(monkeypatch, tmp_path, capsys):
+    work_dir = _seed_workdir(tmp_path)
+    rc, out, err = _run(monkeypatch, capsys, [
+        "--work-dir", str(work_dir), "--target-repo", str(tmp_path), "--yes",
+        "--client-factory", "tests.cli.test_write._fake_factory",
+    ])
+    assert rc == 0
+    assert "relations_created=" in out
+    assert "relations_skipped=" in out

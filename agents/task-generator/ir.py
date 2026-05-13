@@ -32,6 +32,8 @@ class EpicNode:
     risks: list[str] = field(default_factory=list)
     stories: list[StoryNode] = field(default_factory=list)
     related_refs: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
 
 
 ParseWarningKind = Literal[
@@ -40,7 +42,28 @@ ParseWarningKind = Literal[
     "unknown_section",
     "no_h2",
     "fenced_code_heading",
+    "unresolved_dep_ref",
+    "self_dep",
+    "dep_cycle",
 ]
+
+
+@dataclass
+class DependencyEdge:
+    src_epic_idx: int
+    dst_epic_idx: int
+    source: Literal["depends_on", "blocks", "after"]
+    raw_ref: str
+
+
+@dataclass
+class DependencyGraph:
+    edges: list[DependencyEdge] = field(default_factory=list)
+    unresolved_refs: list[dict] = field(default_factory=list)
+    cycles: list[list[int]] = field(default_factory=list)
+    topo_order: list[int] = field(default_factory=list)
+    original_order: list[int] = field(default_factory=list)
+    epic_titles_original: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -100,7 +123,11 @@ class RunReport:
     grava_updated: list[dict] = field(default_factory=list)
     grava_anomalies: list[dict] = field(default_factory=list)
     grava_orphans: list[dict] = field(default_factory=list)
+    grava_deps_created: list[dict] = field(default_factory=list)
+    grava_deps_skipped: list[dict] = field(default_factory=list)
     grava_commit_hash: str | None = None
+    plane_relations_created: list[dict] = field(default_factory=list)
+    plane_relations_skipped: list[dict] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
     spec_page_id: str = ""
@@ -119,6 +146,7 @@ class RunState:
     completed_op_indices: list[int] = field(default_factory=list)
     ref_to_uuid: dict[str, str] = field(default_factory=dict)
     ref_to_sequence_id: dict[str, int] = field(default_factory=dict)
+    plane_relations_posted: list[str] = field(default_factory=list)
     failed_op_index: int | None = None
     failure_detail: str | None = None
     rolled_back: bool = False
@@ -133,6 +161,7 @@ class GravaState:
     completed_op_indices: list[int] = field(default_factory=list)
     ref_to_grava_id: dict[str, str] = field(default_factory=dict)
     plane_comments_posted: list[str] = field(default_factory=list)
+    dep_edges_posted: list[str] = field(default_factory=list)
     failed_op_index: int | None = None
     failure_detail: str | None = None
     rolled_back: bool = False

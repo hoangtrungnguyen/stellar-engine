@@ -127,6 +127,34 @@ def test_no_h2_warns():
     assert "no_h2" in kinds
 
 
+def test_h4_headings_become_tasks():
+    """H4 entries under an H3 story become tasks (not silently dropped into
+    the story description)."""
+    epics, warnings = parse(_load("10_h4_tasks.md"), "https://x", "abc")
+    assert len(epics) == 1
+    epic = epics[0]
+    assert epic.title == "Bravo Auth"
+    assert len(epic.stories) == 2
+
+    story1 = epic.stories[0]
+    assert story1.title == "Build login endpoint"
+    task_titles = [t.title for t in story1.tasks]
+    assert task_titles == ["Add token expiry probe", "rotate refresh tokens"]
+    markers = {t.title: t.type_marker for t in story1.tasks}
+    assert markers["Add token expiry probe"] is None
+    assert markers["rotate refresh tokens"] == "Bug"
+    descriptions = {t.title: t.description_md for t in story1.tasks}
+    assert "Cron job description here." in descriptions["Add token expiry probe"]
+    assert "Refresh rotation detail." in descriptions["rotate refresh tokens"]
+    # H4 content must NOT bleed into the story description.
+    assert "Add token expiry probe" not in story1.description_md
+    assert "Cron job description here." not in story1.description_md
+
+    story2 = epic.stories[1]
+    assert story2.title == "Build logout endpoint"
+    assert [t.title for t in story2.tasks] == ["bullet task one", "bullet task two"]
+
+
 def test_strip_type_marker_unit():
     assert _strip_type_marker("Bug: payment hangs") == ("payment hangs", "Bug")
     assert _strip_type_marker("Login flow") == ("Login flow", None)

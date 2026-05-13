@@ -1,4 +1,4 @@
-# task-generator (Phase 4)
+# task-generator (Phase 6)
 
 Sub-agent that converts one Plane spec page into a planned epic-story-task
 hierarchy, writes it to Plane (with explicit operator approval), and mirrors
@@ -59,12 +59,43 @@ for you. Pass `--no-clone` to disable auto-clone.
 ```bash
 python3 agents/task-generator/cli/run.py <project_id> <page_id> --dry-run \
     [--target-repo PATH] [--allow-duplicate-pages] [--no-clone] \
-    [--run-id YYYYMMDD-HHMMSS]
+    [--run-id YYYYMMDD-HHMMSS] \
+    [--no-dep-reorder] [--allow-dep-cycles] [--strict-deps]
 ```
 
 Output: a master preview path under `<target_repo>/runs/preview/<run_id>/`
 plus one `.epic-NN-*.preview.md` per epic. Hand-review before deciding to
 write.
+
+### Declaring dependencies between epics
+
+Add a blockquote line anywhere inside an epic's body to declare a dependency
+on another epic:
+
+```markdown
+## Auth migration
+
+> Depends on: Schema cleanup, EPIC-1
+
+Body of the epic …
+```
+
+Recognized verbs (case-insensitive): `Depends on:`, `After:`, `Blocks:`
+(reverse direction — "I block X" means X depends on me). Refs resolve by:
+- exact epic title (case-insensitive), or
+- substring match if unambiguous, or
+- Plane work-item ref (e.g. `WEBINTRO-12`) that appears in the target's `related_refs`, or
+- `EPIC-N` slug (1-based by markdown order).
+
+The blockquote lines are stripped from the epic's description before
+preview/Plane write, so they don't leak into the final work-item body.
+
+After the analyzer runs, epics are reordered topologically so prerequisites
+are created in Plane before their dependents. Cycles halt the run with exit
+code 7 (override with `--allow-dep-cycles` to skip reorder, or fix the spec).
+Unresolved refs become warnings unless `--strict-deps` is set, in which case
+they also exit 7. The artifact `<work_dir>/dep_graph.json` captures the full
+analysis result and the master preview gains a `## Dependencies` section.
 
 ## Promote to Plane writes (Phase 2)
 
@@ -184,6 +215,7 @@ Intermediate JSON lands at
 | 4 | missing required Plane work-item type (Phase 2) **or** Grava not initialised (Phase 3) |
 | 5 | partial write — checkpoint persisted; re-run to resume |
 | 6 | rollback completed |
+| 7 | epic dependency cycle detected, or `--strict-deps` + unresolved ref(s) |
 
 ## Troubleshoot
 
@@ -202,6 +234,9 @@ Intermediate JSON lands at
 | `grava.py` exit 5 | One Grava op failed mid-run | Inspect `<work_dir>/grava_state.json`; re-run to resume, or pass `--on-failure rollback` |
 | `report.grava_anomalies` non-empty | Two+ Grava issues share a `plane:<seq>` label | Resolve in Grava (drop one or relabel); re-run |
 | Re-run against same page in Phase 2 created duplicates | Phase 2 has no search-based idempotency | Phase 4 reconciler will fix. For now: don't re-run Phase 2 against an already-written page |
+| `run.py` exit 7 + "Dependency cycle(s)" | Epic A→B→…→A in spec | Fix the `> Depends on:` blockquotes in the spec page, or pass `--allow-dep-cycles` to skip topo reorder |
+| `run.py` exit 7 + "Unresolved dependency ref(s)" | `--strict-deps` set and a ref didn't match | Fix the ref (use the exact epic title or `EPIC-N` slug), or drop `--strict-deps` to demote to a warning |
+| `unresolved_dep_ref` warning in preview | A `> Depends on:` ref didn't match | Edge dropped silently; surface to the operator and either fix the ref or accept the loss |
 
 ## Phase status
 
@@ -210,8 +245,30 @@ Intermediate JSON lands at
   updates), checkpoint-based resume, optional rollback.
 - **Phase 3:** Grava mirror with three-level subtask nesting, cross-link
   labels, Plane-URL embedding, comment-back, and label-based reconciliation.
-- **Phase 4 (current):** Plane-side reconciliation — sentinel label per
-  spec page, preview-time diffs (`create / update / no_change / orphan`),
-  writer honors verdicts, `type_marker → priority/label` mapping.
-- **Phase 5+ (future):** bidirectional drift (Grava→Plane), orphan
-  remediation flows, sub-page expansion when Plane ships the API.
+- **Phase 4:** Plane-side reconciliation — sentinel label per spec page,
+  preview-time diffs (`create / update / no_change / orphan`), writer
+  honors verdicts, `type_marker → priority/label` mapping.
+- **Phase 5:** epic dependency analysis. Operator declares
+  `> Depends on:` / `> Blocks:` / `> After:` blockquotes inside each epic
+  body; the analyzer strips them, builds a directed graph, detects cycles,
+  and topologically reorders epics so prerequisites are created in Plane
+  before their dependents. Artifact: `<work_dir>/dep_graph.json`. Preview
+  gains a `## Dependencies` section. **Grava mirror also reflects the
+  graph:** for each resolved edge, the writer runs
+  `grava dep <prereq_grava_id> <dependent_grava_id> --type blocks`
+  (idempotent — duplicate edges are no-ops). Per-edge state is checkpointed
+  in `grava_state.dep_edges_posted` so resume runs skip already-posted
+  edges.
+- **Phase 6 (current):** Plane-side relation mirror. Same `dep_graph.json`
+  drives a parallel Plane API mirror inside `plane_writer.execute()`. For
+  each resolved edge, the writer GETs the source's
+  `/issues/{src}/relations/` and POSTs `{"relation_type": "blocking",
+  "issues": [<dst>]}` if `dst` isn't already in `blocking`. Plane auto-
+  creates the bidirectional `blocked_by` inverse on the dst side. Per-edge
+  state lives in `state.plane_relations_posted` and report counts in
+  `report.plane_relations_created` / `plane_relations_skipped`. Suppress
+  with `--no-plane-relations`.
+- **Phase 7+ (future):** bidirectional drift (Grava→Plane), LLM-assisted
+  dep inference when no explicit markup exists, orphan remediation flows,
+  finer-grained Plane relation types (`start_after`, `relates_to`, etc.),
+  sub-page expansion when Plane ships the API.
