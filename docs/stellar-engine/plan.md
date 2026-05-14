@@ -84,22 +84,19 @@ No `se` CLI, no `stellar-orchestrator.md`, no `repos.yaml`, no `policies/default
 ### G6. No Generator
 Spec markdown is hand-written into Plane pages. No agent generates specs from a knowledge source.
 
-### G7. Stale top-level `CLAUDE.md`
-`CLAUDE.md` describes `sync.py` (which does not exist) and Plane CLI tooling, not `agents/task-generator/`, `agents/orchestrator/`, or the new `grava_plane_sync.py`. Misleads new contributors.
+### ~~G7. Stale top-level `CLAUDE.md`~~ — **CLOSED** (PR #5 rewrote CLAUDE.md to map two sub-agents, v0 sync, registries, watcher cron, STELLAR_ENGINE_HOME)
 
 ### G8. Two registries with no cross-link
 `repo-map.yaml` (Plane UUID → repo) exists. Future `repos.yaml` (repo name → runtime config) will be added. Without explicit comments operators will edit the wrong one.
 
-### G9. `pr_merge_watcher.sh` is not wired by default
-Operator must install the cron line manually. No `setup.sh` integration, no doctor check.
+### ~~G9. `pr_merge_watcher.sh` is not wired by default~~ — **CLOSED** (setup.sh now prints the cron install snippet; `agents/orchestrator/cli/doctor.py` reports cron presence)
 
 ### ~~G10. Plane sync helper unbuilt~~ — **CLOSED** (`grava_plane_sync.py` + grava agent hooks landed; operator setup doc at `docs/grava-plane-sync-setup.md`)
 
 ### G11. v0 grava→Plane sync swallows all errors
 `|| true` in every grava agent hook means Plane drift is silent. Strategy §3.3 calls for a watermark observer with jsonl outage queue. Track for v0.1.
 
-### G12. Hard-coded `/Users/trungnguyenhoang/...` fallback in grava agent prompts
-Sync script path falls back to a dev-box absolute path when `STELLAR_ENGINE_HOME` is unset. Documented in `docs/grava-plane-sync-setup.md` but easy to miss on a fresh machine. Add a startup check (e.g., in `se doctor` once it lands).
+### ~~G12. Hard-coded `/Users/trungnguyenhoang/...` fallback in grava agent prompts~~ — **CLOSED** (`agents/orchestrator/cli/doctor.py` reports STELLAR_ENGINE_HOME state and points at the sync helper; setup.sh prompts for export)
 
 ---
 

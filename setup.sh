@@ -52,16 +52,16 @@ fi
 success "plane $(plane --version 2>/dev/null || echo 'installed')"
 
 # ── python deps ───────────────────────────────────────────────────────────────
-header "Installing Python dependencies (for sync.py)"
+header "Installing Python dependencies"
 
 PIP=$(command -v pip3 || command -v pip || true)
 if [ -z "$PIP" ]; then
-    warn "pip not found — skipping Python deps (install manually: pip install markdown requests)"
+    warn "pip not found — skipping Python deps (install manually: pip install -r agents/task-generator/requirements.txt markdown)"
 else
-    $PIP install -q markdown requests --break-system-packages 2>/dev/null \
-        || $PIP install -q markdown requests 2>/dev/null \
-        || warn "Could not install Python deps automatically — run: pip install markdown requests"
-    success "markdown, requests installed"
+    $PIP install -q markdown requests pyyaml --break-system-packages 2>/dev/null \
+        || $PIP install -q markdown requests pyyaml 2>/dev/null \
+        || warn "Could not install Python deps automatically — run: pip install markdown requests pyyaml"
+    success "markdown, requests, pyyaml installed"
 fi
 
 # ── credentials ───────────────────────────────────────────────────────────────
@@ -118,6 +118,35 @@ else
     echo "$OUTPUT"
 fi
 
+# ── STELLAR_ENGINE_HOME ───────────────────────────────────────────────────────
+header "STELLAR_ENGINE_HOME"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -n "${STELLAR_ENGINE_HOME:-}" ] && [ -d "$STELLAR_ENGINE_HOME" ]; then
+    success "STELLAR_ENGINE_HOME=$STELLAR_ENGINE_HOME"
+else
+    warn "STELLAR_ENGINE_HOME unset — grava agent hooks will fall back to a hard-coded path."
+    echo ""
+    echo "  Add to your shell profile:"
+    echo ""
+    echo "    export STELLAR_ENGINE_HOME=\"$SCRIPT_DIR\""
+    echo ""
+    echo "  Then: source ~/.zshrc (or ~/.bashrc)"
+fi
+
+# ── pr_merge_watcher cron ─────────────────────────────────────────────────────
+header "PR merge watcher cron"
+
+WATCHER_PATH="$SCRIPT_DIR/agents/orchestrator/scripts/pr_merge_watcher.sh"
+echo ""
+echo "  Install the watcher in each target repo so PR transitions feed back into grava."
+echo "  Cron snippet (replace <target-repo>):"
+echo ""
+echo "    */5 * * * * cd /path/to/<target-repo> && bash $WATCHER_PATH"
+echo ""
+echo "  Add via: crontab -e"
+
 # ── done ──────────────────────────────────────────────────────────────────────
 header "━━━  Setup complete  ━━━"
 echo ""
@@ -125,5 +154,8 @@ echo -e "  ${BOLD}Quick reference:${RESET}"
 echo "  plane projects list"
 echo "  plane issues list <PROJECT>"
 echo "  plane issue create <PROJECT> \"Issue title\""
-echo "  python3 sync.py <project-uuid> <file.md>"
+echo "  python3 upload_project_pages.py <project-uuid> <file.md>"
+echo "  python3 agents/orchestrator/cli/doctor.py --target-repo <path>"
+echo ""
+echo -e "  Run the doctor against any target repo to verify your environment."
 echo ""
