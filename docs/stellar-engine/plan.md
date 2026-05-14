@@ -86,8 +86,7 @@ Spec markdown is hand-written into Plane pages. No agent generates specs from a 
 
 ### ~~G7. Stale top-level `CLAUDE.md`~~ — **CLOSED** (PR #5 rewrote CLAUDE.md to map two sub-agents, v0 sync, registries, watcher cron, STELLAR_ENGINE_HOME)
 
-### G8. Two registries with no cross-link
-`repo-map.yaml` (Plane UUID → repo) exists. Future `repos.yaml` (repo name → runtime config) will be added. Without explicit comments operators will edit the wrong one.
+### ~~G8. Two registries with no cross-link~~ — **CLOSED** (`repo-map.yaml` top comment now explicitly scopes itself to task-generator and reserves `repos.yaml` for the future fleet runtime; schemas declared intentionally separate)
 
 ### ~~G9. `pr_merge_watcher.sh` is not wired by default~~ — **CLOSED** (setup.sh now prints the cron install snippet; `agents/orchestrator/cli/doctor.py` reports cron presence)
 

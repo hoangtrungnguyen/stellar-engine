@@ -1,5 +1,19 @@
 # Plane project UUID -> sibling repo mapping for the task-generator agent.
 #
+# ────────────────────────────────────────────────────────────────────────────
+# SCOPE: this file is the task-generator registry only.
+#
+# Keyed by Plane project UUID; maps to repo metadata (name, git_url,
+# workspace_prefix). Consumed by `agents/task-generator/cli/resolve_repo.py`
+# to locate (and optionally clone) the sibling repo for a given Plane page.
+#
+# This is NOT the fleet-runtime registry. When the `se` CLI / stellar-
+# orchestrator land (docs/stellar-engine/plan.md §4 Phases B, D), they will
+# add a sibling file `repos.yaml` keyed by repo NAME (not Plane UUID) and
+# carrying runtime config (poll_interval_seconds, max_concurrent,
+# team_routing, etc.). Schemas are intentionally separate. Do not merge.
+# ────────────────────────────────────────────────────────────────────────────
+#
 # Two sources are merged at runtime:
 #   1. This root file (legacy / shared overrides)
 #   2. `systems/<Name>/system.yaml` (per-system config — preferred)
