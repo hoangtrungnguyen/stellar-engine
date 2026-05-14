@@ -1,8 +1,8 @@
 # Stellar Engine — Strategy
 
-**Status:** Draft · **Last updated:** 2026-05-13
+**Status:** Draft · **Last updated:** 2026-05-14
 
-> Reality-grounded rewrite. The earlier "fleet of tmux orchestrators driving `/ship` loops across N repos" framing in `~/Desktop/files/stellar-engine-{strategy,plan}.md` describes a future state. This document describes what stellar-engine **is today** (two sub-agents + sync utilities) and how it grows toward that fleet vision.
+> Reality-grounded rewrite. The earlier "fleet of tmux orchestrators driving `/ship` loops across N repos" framing in `~/Desktop/files/stellar-engine-{strategy,plan}.md` describes a future state. This document describes what stellar-engine **is today** (two sub-agents + sync utilities + v0 grava→Plane state sync) and how it grows toward that fleet vision.
 
 ---
 
@@ -62,7 +62,7 @@ The fleet-level runtime (`se` CLI, per-repo tmux orchestrators, `repos.yaml`) is
 | Component | Path | Status | Purpose |
 |:---|:---|:---|:---|
 | `task-generator` agent | `agents/task-generator/` | Phase 6 shipping | Convert Plane spec page → planned epic/story/task hierarchy → write to Plane (with `blocking` relations) → mirror to Grava. Three-phase: preview / Plane / Grava. Operator approval per turn for each non-`--dry-run` phase. |
-| `orchestrator` agent | `agents/orchestrator/` | Untracked but working | Route grava issues to 4 teams (`task-generator`, `epic-task`, `fix-bug`, `qa`). Entry: `/deploy`, `/generate`, `/qa`. Wisps persist state across re-entry. |
+| `orchestrator` agent | `agents/orchestrator/` | Shipped (PR #3) | Route grava issues to 4 teams (`task-generator`, `epic-task`, `fix-bug`, `qa`). Entry: `/deploy`, `/generate`, `/qa`. Wisps persist state across re-entry. |
 | `fix-bug` pipeline | `agents/orchestrator/cli/fix_bug_{claim,verify,pr}.py` + AGENT.md §Fix-Bug | Shipping (Go only) | Claim → Claude-in-worktree (reproduce/RC/fix/regression) → verify → PR. Retry cap 2. Slot freed at PR. See [`docs/ship-bug/strategy.md`](../ship-bug/strategy.md). |
 | `qa` pipeline | `agents/orchestrator/cli/qa_{load,report}.py` + checklist templates | Shipping | Load checklist (cli/api/web/mobile/default) → Claude walks items → write results JSON → generate report → post to grava + label `qa-passed`/`qa-failed`. |
 | PR merge watcher | `agents/orchestrator/scripts/pr_merge_watcher.sh` | Shipping | Cron-style polling of `pr-created` labeled issues. Handles MERGED (close + signal), CLOSED (label `pr-rejected`, re-entry hint), OPEN (stale cap, new comment detection). |
@@ -70,6 +70,8 @@ The fleet-level runtime (`se` CLI, per-repo tmux orchestrators, `repos.yaml`) is
 | Plane sync utilities | `upload_project_pages.py`, `upload_wiki_page.py` | Shipping | Push local markdown → Plane project pages / workspace wiki. State persisted in `.plane-pages.json` / `.plane-workspace-pages.json`. |
 | Setup script | `setup.sh` | Shipping | Install `@aaronshaf/plane` CLI via bun + Python deps; save credentials to `~/.config/plane/config.json`. |
 | MCP wiring | `mcp-setup.md` | Doc | Instructions for connecting Plane MCP server to Claude Code session. |
+| Grava → Plane sync v0 | `agents/task-generator/cli/grava_plane_sync.py` + grava agent hooks | Shipped (PR #1, grava PR #66) | Per-agent-hook approach. Coder / reviewer / pr-creator invoke the helper after every `grava signal`. Non-fatal (`\|\| true`). State map per system. |
+| Operator setup guide | `docs/grava-plane-sync-setup.md` | Shipped | `STELLAR_ENGINE_HOME` env var setup, shell-profile snippets, verification. |
 | System spec template | `systems/SportBuddies/` | Reference | Sample showing the expected layout: `business/`, `design/`, `customer_app/`, `owner_dashboard/`, `backend_core/`, `a2a/`, `web_intro/`. |
 
 ### 3.2 Planned (roadmap)
@@ -78,7 +80,7 @@ The fleet-level runtime (`se` CLI, per-repo tmux orchestrators, `repos.yaml`) is
 |:---|:---|:---|:---|
 | `/ship-bugfix` exposed skill | Plan exists | Expose orchestrator's internal fix-bug as a callable skill so Stellar fleet-runtime can dispatch by skill name. | [`docs/ship-bug/plan.md`](../ship-bug/plan.md) |
 | Pluggable verify backends | Plan exists | Replace Go-only `fix_bug_verify.py` with per-language backends (Python/Node/Rust/…). | [`docs/ship-bug/plan.md`](../ship-bug/plan.md) §B |
-| Grava → Plane state sync | Plan exists | One-way grava issue state → Plane work item state on each coding-team transition. Per-agent hooks in v0. | [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) |
+| Grava → Plane state sync v0.1+ | Plan exists | Watermark observer with jsonl outage queue; replay on recovery. v0 (hooks) already shipped. | [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) |
 | Self-host Plane | Plan exists | Run Plane locally so workspace state is owned. | [`docs/self-host/self-host-plane-plan.md`](../self-host/self-host-plane-plan.md) |
 | `se` CLI | Not started | Operator control plane for fleet runtime (init/repos/doctor/start/stop/status/teams/attach/logs/pause/resume/nudge). | (this doc + companion plan.md) |
 | `stellar-orchestrator` agent | Not started | Per-repo thin wrapper looping `/ship-*` skills (instead of in-Claude `/deploy`). | (this doc + plan.md) |
@@ -132,10 +134,10 @@ Operator experience target: open a Plane spec page, run `/generate`, approve pre
 | Phase | Component | Outcome | Status |
 |:---|:---|:---|:---|
 | 1 | `task-generator` Phases 1–6 | Plane → Plane + Grava mirror with deps | ✅ shipped |
-| 2 | `orchestrator/` agents + CLI scripts | In-Claude routing for 4 teams | ✅ shipped (untracked on `main`) |
-| 3 | Commit + test `orchestrator/`; pluggable verify | Stable foundation for fleet wrap | ⬜ in progress (see plan.md) |
-| 4 | `/ship-bugfix`, `/ship-qa` standalone skills | Callable team skills with stable signal contract | ⬜ planned ([ship-bug plan](../ship-bug/plan.md)) |
-| 5 | Grava → Plane state sync (v0) | One-way state mirror via per-agent hooks | ⬜ planned ([sync plan](../grava-plane-status-sync-plan.md)) |
+| 2 | `orchestrator/` agents + CLI scripts | In-Claude routing for 4 teams | ✅ shipped (PR #3) |
+| 3 | Grava → Plane state sync (v0) | One-way state mirror via per-agent hooks | ✅ shipped (PR #1 + grava PR #66) |
+| 4 | Test `orchestrator/`; pluggable verify | Stable foundation for fleet wrap | ⬜ in progress (see plan.md) |
+| 5 | `/ship-bugfix`, `/ship-qa` standalone skills | Callable team skills with stable signal contract | ⬜ planned ([ship-bug plan](../ship-bug/plan.md)) |
 | 6 | `se` CLI Phase 1 (read-only) | `se init`, `se repos`, `se doctor` | ⬜ planned |
 | 7 | `stellar-orchestrator` agent + tmux lifecycle | Fleet runtime hosting per-repo loops | ⬜ planned |
 | 8 | `se` Phase 2–3 (lifecycle + visibility) | `start`/`stop`/`status`/`teams`/`logs`/`pause`/`resume`/`nudge` | ⬜ planned |
@@ -151,7 +153,6 @@ Operator experience target: open a Plane spec page, run `/generate`, approve pre
 
 | Risk | Mitigation |
 |:---|:---|
-| `orchestrator/` directory loss (untracked on main) | Phase 3 commits it. Treat this as a P0 plan item |
 | Go-only verify limits target-repo scope | Pluggable backends in plan.md gap 3 |
 | Two registries (`repo-map.yaml`, future `repos.yaml`) drift | Distinct keys (UUID vs name) + cross-link comments + `se doctor` cross-validation |
 | task-generator + future Observer both write Plane | Lock `state` field ownership: only the state-sync owns `state` on update paths; `task-generator` never sets `state` |
@@ -160,7 +161,8 @@ Operator experience target: open a Plane spec page, run `/generate`, approve pre
 | PR watcher cron drift / not running | Singleton PID guard + heartbeat check (TODO); document `*/5 * * * *` install in setup |
 | Multiple Claude sessions race on `grava claim` | grava enforces single-claimant at DB; `fix_bug_claim.py` exits 2 cleanly |
 | Plane workspace state drifts from grava | One-way sync (grava → Plane) keeps grava authoritative; Plane edits are advisory |
-| Self-host Plane outages back up sync | Local jsonl queue + replay (future when grava→Plane sync upgrades from per-agent hook to watermark observer) |
+| Self-host Plane outages back up sync (v0 hook) | v0 swallows errors via `\|\| true`; missed transitions surface as drift. v0.1 watermark observer with jsonl queue + replay is the durable fix |
+| `STELLAR_ENGINE_HOME` unset on a fresh machine | Hard-coded `/Users/trungnguyenhoang/IdeaProjects/stellar-engine` fallback ships in agent prompts. Operator setup doc at `docs/grava-plane-sync-setup.md` walks through correct setup |
 
 ---
 
