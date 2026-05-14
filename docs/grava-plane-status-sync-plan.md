@@ -155,10 +155,13 @@ hard-coded `IdeaProjects/stellar-engine` location for the dev box.
 
 ## Operator setup checklist
 
+Step-by-step instructions live in **[`grava-plane-sync-setup.md`](./grava-plane-sync-setup.md)**. Quick summary:
+
 1. Ensure `~/.config/plane/config.json` (or env) carries the right workspace
    creds — the sync helper reuses `plane_client.load_credentials()` with the
    same precedence as the rest of the agent.
-2. `export STELLAR_ENGINE_HOME=/path/to/stellar-engine` in shell profile.
+2. `export STELLAR_ENGINE_HOME=/path/to/stellar-engine` in shell profile
+   (full instructions in the setup doc — zsh / bash / fish + verification).
 3. Add `plane_state_map:` block to each `systems/<Name>/system.yaml`.
 4. First time: run `sync_plane_status.py grava-XXXX --list-states` (new flag)
    to dump the Plane states so the operator can populate the map correctly.
