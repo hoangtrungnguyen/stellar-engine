@@ -1,6 +1,6 @@
 # Stellar Engine — Implementation Plan
 
-**Status:** Draft · **Last updated:** 2026-05-13
+**Status:** Draft · **Last updated:** 2026-05-14
 
 Companion to [`strategy.md`](strategy.md). Strategy describes intent and components. This plan covers what is built, what is missing, and the concrete sequencing to close the gap toward the fleet runtime.
 
@@ -8,7 +8,7 @@ Companion to [`strategy.md`](strategy.md). Strategy describes intent and compone
 
 ## 1. Context
 
-`main` has two sub-agents and a set of utilities. The `orchestrator/` directory is **untracked**. The `task-generator/` is committed and on Phase 6. The fleet runtime (`se` CLI, `stellar-orchestrator`, `repos.yaml`) and the Generator agent are unbuilt. This plan codifies the path from today's in-Claude orchestrator to a fleet runtime — without re-doing what already works.
+`main` has two sub-agents, a v0 grava→Plane state sync, and a set of utilities. The `orchestrator/` directory shipped in PR #3. The `task-generator/` is on Phase 6. The grava→Plane sync v0 (per-agent hooks + `grava_plane_sync.py`) is live. The fleet runtime (`se` CLI, `stellar-orchestrator`, `repos.yaml`) and the Generator agent are unbuilt. This plan codifies the path from today's in-Claude orchestrator to a fleet runtime — without re-doing what already works.
 
 The plan is grounded against three observed scale signals:
 
@@ -41,29 +41,23 @@ Phases are sized so that Phase N can be exercised on real workloads for a week b
 | `setup.sh` | — | Install plane CLI + Python deps + creds |
 | `mcp-setup.md` | — | Plane MCP server connection guide |
 | `upload_project_pages.py`, `upload_wiki_page.py` | — | Markdown → Plane sync utilities |
+| `agents/orchestrator/AGENT.md` (399 lines) | — | Full pipeline: routing, fix-bug, QA, task-generator delegation, wisp inventory, hard limits |
+| `agents/orchestrator/cli/route.py` | — | Type/label → team mapping |
+| `agents/orchestrator/cli/pick_ready.py` | — | Backlog probe per team |
+| `agents/orchestrator/cli/fix_bug_{claim,verify,pr}.py` | — | Fix-bug Phases 0/2/3 (verify is Go-only) |
+| `agents/orchestrator/cli/qa_{load,report}.py` | — | QA Phases 0/2 |
+| `agents/orchestrator/cli/task_gen_expand.py` | — | Bridge from grava epic → task-generator run |
+| `agents/orchestrator/scripts/pr_merge_watcher.sh` | — | Cron PR lifecycle watcher |
+| `agents/orchestrator/templates/qa/*.md` | — | 5 QA checklists (default + cli/api/web/mobile) |
+| `agents/task-generator/cli/grava_plane_sync.py` + `tests/cli/test_grava_plane_sync.py` | — | v0 grava→Plane state sync helper (invoked by grava agent hooks) |
+| `docs/grava-plane-sync-setup.md` | — | Operator setup guide for `STELLAR_ENGINE_HOME` env var |
 
-### 2.2 Built but untracked (P0 to commit)
-
-| Path | Function |
-|:---|:---|
-| `agents/orchestrator/AGENT.md` (399 lines) | Full pipeline: routing, fix-bug, QA, task-generator delegation, wisp inventory, hard limits |
-| `agents/orchestrator/cli/route.py` | Type/label → team mapping |
-| `agents/orchestrator/cli/pick_ready.py` | Backlog probe per team |
-| `agents/orchestrator/cli/fix_bug_claim.py` | Phase 0 claim |
-| `agents/orchestrator/cli/fix_bug_verify.py` | Phase 2 verify (Go-only) |
-| `agents/orchestrator/cli/fix_bug_pr.py` | Phase 3 PR creation |
-| `agents/orchestrator/cli/qa_load.py` | QA Phase 0 checklist loader |
-| `agents/orchestrator/cli/qa_report.py` | QA Phase 2 report generator |
-| `agents/orchestrator/cli/task_gen_expand.py` | Bridge from grava epic → task-generator run |
-| `agents/orchestrator/scripts/pr_merge_watcher.sh` | Cron PR lifecycle watcher |
-| `agents/orchestrator/templates/qa/*.md` | 5 QA checklists (default + cli/api/web/mobile) |
-
-### 2.3 Planned (this plan owns sequencing; sub-plans own detail)
+### 2.2 Planned (this plan owns sequencing; sub-plans own detail)
 
 | Component | Owner doc |
 |:---|:---|
 | `/ship-bugfix` standalone skill + pluggable verify | [`docs/ship-bug/plan.md`](../ship-bug/plan.md) |
-| Grava → Plane state sync v0 | [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) |
+| Grava → Plane state sync v0.1+ (watermark observer) | [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) |
 | Self-host Plane | [`docs/self-host/self-host-plane-plan.md`](../self-host/self-host-plane-plan.md) |
 | `se` CLI | this plan §4 Phase B |
 | `stellar-orchestrator` agent | this plan §4 Phase D |
@@ -73,11 +67,10 @@ Phases are sized so that Phase N can be exercised on real workloads for a week b
 
 ## 3. Gaps
 
-### G1. `orchestrator/` untracked
-Loses on any clean clone. P0.
+### ~~G1. `orchestrator/` untracked~~ — **CLOSED** (PR #3 landed)
 
 ### G2. No tests for `orchestrator/cli/`
-Zero coverage. `task-generator/tests/` is the contrast (10 files). Regressions in `route.py`, `fix_bug_*`, `qa_*` go undetected.
+Zero coverage. `task-generator/tests/` is the contrast (10+ files including `test_grava_plane_sync.py`). Regressions in `route.py`, `fix_bug_*`, `qa_*` go undetected.
 
 ### G3. Verify is Go-only
 `fix_bug_verify.py` hard-codes `go test`, `golangci-lint`, `go build`. Blocks multi-language fleet.
@@ -92,7 +85,7 @@ No `se` CLI, no `stellar-orchestrator.md`, no `repos.yaml`, no `policies/default
 Spec markdown is hand-written into Plane pages. No agent generates specs from a knowledge source.
 
 ### G7. Stale top-level `CLAUDE.md`
-Worktree `CLAUDE.md` describes `sync.py` (which does not exist) and Plane CLI tooling, not `agents/task-generator/` or `agents/orchestrator/`. Misleads new contributors.
+`CLAUDE.md` describes `sync.py` (which does not exist) and Plane CLI tooling, not `agents/task-generator/`, `agents/orchestrator/`, or the new `grava_plane_sync.py`. Misleads new contributors.
 
 ### G8. Two registries with no cross-link
 `repo-map.yaml` (Plane UUID → repo) exists. Future `repos.yaml` (repo name → runtime config) will be added. Without explicit comments operators will edit the wrong one.
@@ -100,19 +93,21 @@ Worktree `CLAUDE.md` describes `sync.py` (which does not exist) and Plane CLI to
 ### G9. `pr_merge_watcher.sh` is not wired by default
 Operator must install the cron line manually. No `setup.sh` integration, no doctor check.
 
-### G10. Plane sync (grava → Plane state) plan exists but is unbuilt
-`sync_plane_status.py` is referenced in [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) but the file does not exist. The Plane client lacks `list_states()`.
+### ~~G10. Plane sync helper unbuilt~~ — **CLOSED** (`grava_plane_sync.py` + grava agent hooks landed; operator setup doc at `docs/grava-plane-sync-setup.md`)
+
+### G11. v0 grava→Plane sync swallows all errors
+`|| true` in every grava agent hook means Plane drift is silent. Strategy §3.3 calls for a watermark observer with jsonl outage queue. Track for v0.1.
+
+### G12. Hard-coded `/Users/trungnguyenhoang/...` fallback in grava agent prompts
+Sync script path falls back to a dev-box absolute path when `STELLAR_ENGINE_HOME` is unset. Documented in `docs/grava-plane-sync-setup.md` but easy to miss on a fresh machine. Add a startup check (e.g., in `se doctor` once it lands).
 
 ---
 
 ## 4. Plan
 
-### Phase A — Foundation (close G1, G2, G7, G9)
+### Phase A — Foundation (closes G2, G7, G9)
 
-**A1. Commit `agents/orchestrator/`.**
-- Path: `agents/orchestrator/` recursive (exclude `__pycache__/` per existing `.gitignore` policy).
-- Action: `git add agents/orchestrator/ && git commit -m "Add orchestrator agent: route + fix-bug + QA pipelines"`.
-- Verify: `git status` clean; clone-test on a fresh checkout shows the agent.
+**~~A1. Commit `agents/orchestrator/`.~~** — **DONE** (PR #3).
 
 **A2. Tests for `orchestrator/cli/`.**
 - Create `agents/orchestrator/tests/__init__.py` + one test file per CLI script.
@@ -221,11 +216,13 @@ Operator must install the cron line manually. No `setup.sh` integration, no doct
 **F4. Wire to `task-generator`.**
 - After F2 lands a draft, the operator runs `/generate <draft_path>` → uploads via `upload_project_pages.py` → kicks off `task-generator` Phase A.
 
-### Phase G — Hardening (close G3 partial, G10, remaining)
+### Phase G — Hardening (closes G3 partial, G11, remaining)
 
 **G1. Pluggable verify backends.** See [`docs/ship-bug/plan.md`](../ship-bug/plan.md) Phase B.
 
-**G2. Grava → Plane state sync v0.** See [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md). Ship the per-agent hook approach; defer watermark observer.
+**~~G2. Grava → Plane state sync v0.~~** — **DONE** (`grava_plane_sync.py` + grava agent hooks + operator setup doc landed).
+
+**G2′. Grava → Plane state sync v0.1 (watermark observer).** Per [`docs/grava-plane-status-sync-plan.md`](../grava-plane-status-sync-plan.md) future work. Adds: per-repo watermark file, Dolt commit diffing, jsonl outage queue + replay. Closes G11. Defer until v0 produces drift evidence.
 
 **G3. Crash recovery.**
 - `stellar-orchestrator` reads its own `logs/dispatch.jsonl` on restart, identifies last in-flight issue, resumes from the appropriate wisp phase.
@@ -242,7 +239,7 @@ Operator must install the cron line manually. No `setup.sh` integration, no doct
 
 | Phase | Path | Action |
 |:---|:---|:---|
-| A1 | `agents/orchestrator/` (recursive) | `git add` + commit |
+| ~~A1~~ | `agents/orchestrator/` (recursive) | ~~`git add` + commit~~ — done (PR #3) |
 | A2 | `agents/orchestrator/tests/*.py` | Create |
 | A3 | `CLAUDE.md` (repo root) | Rewrite |
 | A4 | `setup.sh`, `agents/orchestrator/cli/doctor.py`, `agents/orchestrator/AGENT.md` | Edit / create |
@@ -261,7 +258,8 @@ Operator must install the cron line manually. No `setup.sh` integration, no doct
 | E5 | `policies/default.yaml` | Populate |
 | F1–F4 | `agents/generator/{AGENT.md,cli/*.py}` | Create |
 | G1 | per ship-bug plan | — |
-| G2 | per grava-plane-status-sync plan | — |
+| ~~G2~~ | `agents/task-generator/cli/grava_plane_sync.py`, grava agents | ~~Create~~ — done (PR #1 + grava PR #66) |
+| G2′ | `agents/task-generator/cli/grava_plane_observer.py`, watermark + jsonl queue | Create (v0.1) |
 | G3 | `agents/stellar-orchestrator.md`, `cli/se` | Edit |
 | G4 | `cli/se` | Edit |
 | G5 | `tests/integration/` | Create |
@@ -271,10 +269,10 @@ Operator must install the cron line manually. No `setup.sh` integration, no doct
 ## 6. Verification
 
 **After Phase A:**
-- `git ls-files agents/orchestrator/ | wc -l` ≥ 12.
+- ~~`git ls-files agents/orchestrator/ | wc -l` ≥ 12.~~ (done — PR #3)
 - `python3 -m pytest agents/orchestrator/tests/` → 0 failures.
-- A clone-test of `main` shows the orchestrator agent end-to-end.
 - `bash setup.sh` prints cron install snippet.
+- `CLAUDE.md` references `agents/task-generator/`, `agents/orchestrator/`, and `agents/task-generator/cli/grava_plane_sync.py` instead of `sync.py`.
 
 **After Phase B:**
 - `cli/se init` in a clean directory creates `repos.yaml` + `policies/default.yaml`.
@@ -309,27 +307,31 @@ Operator must install the cron line manually. No `setup.sh` integration, no doct
 ## 7. Sequencing and parallelism
 
 ```
-A1 ─> A2 ──┬──> A3 ──> A4 ────────────────────────────┐
-           │                                          │
-           └──> [ship-bug plan Phases A–D run in     │
-                 parallel with Phase B–F here]       │
+[A1 done]
+   │
+   ▼
+A2 ──┬──> A3 ──> A4 ─────────────────────────────────┐
+     │                                               │
+     └──> [ship-bug plan Phases A–D run in          │
+            parallel with Phase B–F here]           │
+                                                     │
+B1 ─> B2 ─> B3 ─> B4 ─┬──> D1 ─> D2 ─> D3 ──> E1–E5 ─┤
+                      │                              │
+                      └──> C1 ─> C2 ─> C3 (parallel)─┘
                                                       │
-B1 ─> B2 ─> B3 ─> B4 ─┬──> D1 ─> D2 ─> D3 ──> E1–E5 ──┤
-                      │                               │
-                      └──> C1 ─> C2 ─> C3 (parallel) ─┘
-                                                       │
                                           F1–F4 (independent of B–E)
-                                                       │
-                                          G1–G5 (after all above stable)
+                                                      │
+                                          G1, G2′, G3–G5 (after above stable)
 ```
 
 **Hard sequencing rules:**
 
-- **A1 blocks everything.** No further work until `orchestrator/` is committed.
+- ~~**A1 blocks everything.**~~ Done — no longer a gate.
 - **B1 blocks B2–B4** (skeleton must exist before subcommands).
 - **C1 + C2 block D2** (`se start` invokes the skills via the orchestrator).
 - **D1 blocks D2** (agent file must exist before tmux launches it).
 - **F is independent of B–E.** Generator can be authored without fleet runtime; it lands specs into Plane via the existing `upload_project_pages.py`.
+- **G2′ (watermark observer) waits on v0 drift evidence.** Don't pre-build the queue + replay infra before knowing it's needed.
 - **G is last.** Hardening assumes the components exist.
 
 **Pacing:** allow one week of real-workload exercise between phase bands (A → BCD → E → F → G). Bands inside a row may parallelize across two operators.
