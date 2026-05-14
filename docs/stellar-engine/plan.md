@@ -93,8 +93,8 @@ Spec markdown is hand-written into Plane pages. No agent generates specs from a 
 
 ### ~~G10. Plane sync helper unbuilt~~ — **CLOSED** (`grava_plane_sync.py` + grava agent hooks landed; operator setup doc at `docs/grava-plane-sync-setup.md`)
 
-### G11. v0 grava→Plane sync swallows all errors
-`|| true` in every grava agent hook means Plane drift is silent. Strategy §3.3 calls for a watermark observer with jsonl outage queue. Track for v0.1.
+### ~~G11. v0 grava→Plane sync swallows all errors~~ — **PARTIAL** (visibility shipped; drift recovery still v0.1)
+`grava_plane_sync.py --log-failures` now appends JSONL per non-success path (`no_creds`, `no_internet`, `db_init`, `db_query`, `plane_creds`, `no_plane_label`, `plane_api`, `save_state`). Default: `~/.local/share/grava-plane-sync/errors.jsonl`. `doctor.py` warns on failures in last 24h. **Remaining for v0.1 (G2′):** watermark observer + jsonl outage queue to actually recover drift, not just expose it. Grava agent prompts need `--log-failures` passed through (follow-up grava PR).
 
 ### ~~G12. Hard-coded `/Users/trungnguyenhoang/...` fallback in grava agent prompts~~ — **CLOSED** (`agents/orchestrator/cli/doctor.py` reports STELLAR_ENGINE_HOME state and points at the sync helper; setup.sh prompts for export)
 

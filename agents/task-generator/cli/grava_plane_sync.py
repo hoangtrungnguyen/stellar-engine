@@ -34,6 +34,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,8 +51,47 @@ from plane_client import (  # noqa: E402
 )
 
 DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "grava-plane-sync"
+DEFAULT_FAILURE_LOG = DEFAULT_STATE_DIR / "errors.jsonl"
 
 log = logging.getLogger("grava_plane_sync")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Failure log (G11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def log_failure(
+    path: Path | None,
+    *,
+    project_id: str,
+    issue_id: str | None,
+    gate: str,
+    exit_code: int,
+    detail: str,
+) -> None:
+    """Append one JSONL line describing a non-success path. Best-effort.
+
+    `gate` values: no_creds, no_internet, db_init, db_query, plane_creds,
+    no_plane_label, plane_api, save_state.
+    """
+    if path is None:
+        return
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project_id": project_id,
+        "issue_id": issue_id,
+        "gate": gate,
+        "exit_code": exit_code,
+        "detail": detail[:500],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        # Logging the logger fails → stderr only; do not raise.
+        log.debug("failure-log write failed (%s): %s", path, exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -608,6 +648,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to system.yaml containing plane_state_map. Optional.",
     )
     ap.add_argument(
+        "--log-failures",
+        type=Path,
+        default=DEFAULT_FAILURE_LOG,
+        help=(
+            "Append-only JSONL log of non-success paths "
+            f"(default: {DEFAULT_FAILURE_LOG}). "
+            "Pass /dev/null to disable."
+        ),
+    )
+    ap.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -622,17 +672,42 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    failure_log: Path | None = args.log_failures
+    # `--log-failures /dev/null` (or any non-regular path the user can't write
+    # to) acts as a disable switch — log_failure() catches OSError silently.
+    if failure_log and str(failure_log) == "/dev/null":
+        failure_log = None
+
+    project_id = args.project_id
+    issue_id = args.issue_id
+
     # Gate 0: Plane configured?
     if not plane_configured():
         log.debug("Plane not configured — skip")
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="no_creds",
+            exit_code=0,
+            detail="PLANE_API_TOKEN/PLANE_WORKSPACE env unset and ~/.config/plane/config.json missing",
+        )
         return 0
 
-    state_path = args.state_file or (DEFAULT_STATE_DIR / f"{args.project_id}.json")
+    state_path = args.state_file or (DEFAULT_STATE_DIR / f"{project_id}.json")
     state = load_state(state_path)
 
     # Gate 1: internet?
     if not internet_ok():
         log.info("internet check failed — skip Plane sync")
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="no_internet",
+            exit_code=0,
+            detail="TCP connect api.plane.so:443 failed",
+        )
         return 0
 
     # Load DB.
@@ -640,16 +715,29 @@ def main(argv: list[str] | None = None) -> int:
         db = GravaDB(args.grava_repo)
     except RuntimeError as exc:
         log.error("%s", exc)
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="db_init",
+            exit_code=1,
+            detail=str(exc),
+        )
         return 1
 
     # Resolve issues to sync.
     try:
-        if args.issue_id:
-            row = db.fetch_issue(args.issue_id)
+        if issue_id:
+            row = db.fetch_issue(issue_id)
             if not row:
-                log.debug(
-                    "issue %s missing plane:* label — silent skip",
-                    args.issue_id,
+                log.debug("issue %s missing plane:* label — silent skip", issue_id)
+                log_failure(
+                    failure_log,
+                    project_id=project_id,
+                    issue_id=issue_id,
+                    gate="no_plane_label",
+                    exit_code=2,
+                    detail="grava issue has no `plane:<seq>` label",
                 )
                 return 2
             rows = [row]
@@ -660,6 +748,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
     except RuntimeError as exc:
         log.error("Grava DB query failed: %s", exc)
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="db_query",
+            exit_code=1,
+            detail=str(exc),
+        )
         return 1
 
     # Plane client + caches.
@@ -667,18 +763,26 @@ def main(argv: list[str] | None = None) -> int:
         token, host, workspace = load_credentials()
     except RuntimeError as exc:
         log.error("Plane credentials: %s", exc)
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="plane_creds",
+            exit_code=1,
+            detail=str(exc),
+        )
         return 1
     client = PlaneClient(host=host, workspace=workspace, token=token)
 
-    state_map = _load_state_map(args.system_yaml, args.project_id)
-    state_mapper = StateMapper(client, args.project_id, state, state_map)
+    state_map = _load_state_map(args.system_yaml, project_id)
+    state_mapper = StateMapper(client, project_id, state, state_map)
     member_mapper = MemberMapper(client, state)
     state_mapper.warm()
     member_mapper.warm()
 
-    syncer = PlaneSyncer(client, args.project_id, state, state_mapper, member_mapper)
+    syncer = PlaneSyncer(client, project_id, state, state_mapper, member_mapper)
 
-    plane_failure = False
+    plane_failure_detail: list[str] = []
     for row in rows:
         grava_id = row["id"]
         is_first_seen = grava_id not in state.issues
@@ -686,15 +790,33 @@ def main(argv: list[str] | None = None) -> int:
             sync_issue(db, syncer, state, row, is_first_seen)
         except Exception as exc:  # noqa: BLE001
             log.warning("sync_issue(%s) failed: %s", grava_id, exc)
-            plane_failure = True
+            plane_failure_detail.append(f"{grava_id}: {exc}")
 
     # Always save state (caches + cursors + per-issue snapshot).
     try:
         save_state(state, state_path)
     except OSError as exc:
         log.warning("save_state failed: %s", exc)
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="save_state",
+            exit_code=0,
+            detail=f"{state_path}: {exc}",
+        )
 
-    return 3 if plane_failure else 0
+    if plane_failure_detail:
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="plane_api",
+            exit_code=3,
+            detail="; ".join(plane_failure_detail),
+        )
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

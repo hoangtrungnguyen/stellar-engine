@@ -23,8 +23,11 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+SYNC_FAILURE_LOG = Path.home() / ".local" / "share" / "grava-plane-sync" / "errors.jsonl"
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -126,6 +129,50 @@ def check_cron(target_repo: Path) -> Check:
     )
 
 
+def check_sync_failures(window_hours: int = 24) -> Check:
+    """Warn if grava_plane_sync.py has logged failures in the last window."""
+    if not SYNC_FAILURE_LOG.exists():
+        return Check("grava→Plane sync failures", "ok", "no failure log yet")
+    cutoff = time.time() - window_hours * 3600
+    recent_by_gate: dict[str, int] = {}
+    total = 0
+    try:
+        with SYNC_FAILURE_LOG.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts_str = rec.get("ts", "")
+                try:
+                    ts = time.mktime(time.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ"))
+                except ValueError:
+                    continue
+                if ts < cutoff:
+                    continue
+                total += 1
+                gate = rec.get("gate", "unknown")
+                recent_by_gate[gate] = recent_by_gate.get(gate, 0) + 1
+    except OSError as exc:
+        return Check("grava→Plane sync failures", "warn", f"could not read log: {exc}")
+    if not total:
+        return Check(
+            "grava→Plane sync failures",
+            "ok",
+            f"no failures in last {window_hours}h ({SYNC_FAILURE_LOG})",
+        )
+    breakdown = ", ".join(f"{g}={n}" for g, n in sorted(recent_by_gate.items()))
+    return Check(
+        "grava→Plane sync failures",
+        "warn",
+        f"{total} failure(s) in last {window_hours}h — {breakdown}\n"
+        f"Log: {SYNC_FAILURE_LOG}",
+    )
+
+
 def check_target_repo(target_repo: Path) -> list[Check]:
     out: list[Check] = []
     if not target_repo.is_dir():
@@ -186,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Watcher cron
     checks.append(check_cron(args.target_repo))
+
+    # G11 — sync failure log
+    checks.append(check_sync_failures())
 
     print(render(checks, args.json))
 
