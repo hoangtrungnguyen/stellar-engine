@@ -92,14 +92,14 @@ def render_markdown(page: dict, cfg: dict, project_id: str) -> str:
     return frontmatter + f"# {name}\n\n{body}\n"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Download Plane project pages to local markdown")
     parser.add_argument("project_id", help="Plane project UUID or shortcode")
     parser.add_argument("--output-root", default="systems",
                         help="Root directory (default: systems/)")
     parser.add_argument("--dry-run", action="store_true",
                         help="List pages without writing files")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cfg = load_config()
 
@@ -107,7 +107,7 @@ def main() -> None:
         pages = list_pages(cfg, args.project_id)
     except requests.HTTPError as e:
         print(f"ERROR listing pages: {e.response.status_code} {e.response.text}", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     out_dir = Path(args.output_root) / cfg["workspace"] / args.project_id
     if not args.dry_run:
@@ -140,7 +140,8 @@ def main() -> None:
 
     summary = f"\n{written if not args.dry_run else len(seen)} pages → {out_dir}"
     print(summary)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
