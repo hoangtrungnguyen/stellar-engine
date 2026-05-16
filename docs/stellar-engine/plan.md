@@ -69,8 +69,7 @@ Phases are sized so that Phase N can be exercised on real workloads for a week b
 
 ### ~~G1. `orchestrator/` untracked~~ — **CLOSED** (PR #3 landed)
 
-### G2. No tests for `orchestrator/cli/`
-Zero coverage. `task-generator/tests/` is the contrast (10+ files including `test_grava_plane_sync.py`). Regressions in `route.py`, `fix_bug_*`, `qa_*` go undetected.
+### ~~G2. No tests for `orchestrator/cli/`~~ — **PARTIAL** (50 tests across 6 files cover `route.py`, `pick_ready.py`, `fix_bug_{claim,verify,pr}.py`, `doctor.py`; `qa_{load,report}.py` + `task_gen_expand.py` deferred to follow-up)
 
 ### G3. Verify is Go-only
 `fix_bug_verify.py` hard-codes `go test`, `golangci-lint`, `go build`. Blocks multi-language fleet.
