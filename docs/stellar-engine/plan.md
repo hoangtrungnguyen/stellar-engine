@@ -207,7 +207,7 @@ Generator sub-plan phases map to this Phase F. Summary:
 | D | LLM outline (`llm_client.py` + `cli/outline.py`) | **deferred** — manual via Claude Code session until API key budget exists |
 | E | Render + `se generate` subcommand (wraps `cli/run.py`); structured diff on re-run | ✅ done |
 | F | Operator polish: `.gitignore`, `setup.sh`, `AGENT.md`, `.env.example` | ✅ done |
-| G | Doctor integration (optional) | planned |
+| G | Doctor integration: generator + .env checks in `cli/se doctor` | ✅ done |
 | — | PDF frontend (was Phase C) | **deferred** |
 
 Input scope: one markdown file. PDF / URLs / transcripts / codebases all deferred.

@@ -1,6 +1,6 @@
 # Generator Agent — Implementation Plan
 
-**Status:** Phase A ✅ · Phase B ✅ · Phase E ✅ · Phase F ✅ · Phase G optional (D deferred) · **Last updated:** 2026-05-16
+**Status:** Phase A ✅ · Phase B ✅ · Phase E ✅ · Phase F ✅ · Phase G ✅ (D deferred) · **Last updated:** 2026-05-16
 
 This plan covers the **CLI scaffold + minimal markdown extract/render MVP** for the Generator agent — enough to take one markdown source file and emit one spec draft, end-to-end. The agent translates a document into reviewable spec markdown files under `drafts/<system>/`; it never writes to Plane or grava directly.
 
@@ -266,12 +266,16 @@ class Section:
 
 **F4. Update `docs/stellar-engine/plan.md`.** ✅ Phase F summary table now shows A/B/E/F as `✅ done`; G6 row marked CLOSED (MVP) with the manual-outline caveat preserved.
 
-### Phase G — Doctor integration (optional, can defer)
+### Phase G — Doctor integration — ✅ DONE (2026-05-16)
 
-**G1. Extend `agents/orchestrator/cli/doctor.py`.**
-- Check `ANTHROPIC_API_KEY` present.
-- Check `pymupdf` + `anthropic` importable.
-- Check `drafts/` exists (informational).
+> Landed: generator checks live in `cli/se doctor` (engine-level), not in `agents/orchestrator/cli/doctor.py` (which targets a single repo — wrong scope for an engine-wide agent). Five new check helpers (`_check_python_module`, `_check_env_file`, `_check_generator`) wired into `cmd_doctor`. 9 new tests load `cli/se` as a module via `SourceFileLoader` and exercise the helpers directly. Total generator suite: **102 passed in 0.11s**.
+
+**G1. Extend `cli/se doctor`.** ✅
+- `_check_generator(base)` — `agents/generator/` package present (error if missing), `markdown` + `markdownify` importable (required), `anthropic` + `pymupdf` importable (warn-only — Phase D + PDF deferred), `drafts/` directory status (ok with run count, warn if missing with `se generate` hint).
+- `_check_env_file(base)` — `.env` present (ok) or missing (warn with hint to copy `.env.example`).
+- `_check_python_module(name, *, required, note)` — generic importability probe; deferred modules report as warn with a phase pointer.
+
+Note: the original plan named `agents/orchestrator/cli/doctor.py` as the target. That doctor is target-repo-scoped (checks `.grava`, `/ship` skill, etc.); the generator is engine-level, so `cli/se doctor` is the right home. The orchestrator doctor remains unchanged.
 
 ---
 
@@ -302,6 +306,8 @@ class Section:
 | F2 | `setup.sh` | Add deps + ANTHROPIC_API_KEY hint | ✅ |
 | F3 | `agents/generator/AGENT.md` | Flesh out | ✅ |
 | F4 | `docs/stellar-engine/plan.md` | Cross-link | ✅ |
+| G1 | `cli/se` (add `_check_generator` + `_check_env_file` + `_check_python_module`) | Edit | ✅ |
+| G1 | `agents/generator/tests/test_doctor_checks.py` | Create | ✅ |
 
 ---
 
