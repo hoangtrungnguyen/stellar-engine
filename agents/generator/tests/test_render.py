@@ -104,19 +104,22 @@ def test_h2_uses_epic_title():
     assert "\n## Court Booking\n" in text
 
 
-def test_ui_ux_design_block_rendered():
+def test_ui_ux_design_block_rendered_as_h4_under_story():
     epic = _load_outline().epics[0]
     text = render_epic(epic, system_name="Demo", meta=_meta())
-    assert "**UI/UX Design:**" in text
-    assert "[Figma — Booking flow](https://figma.com/x)" in text
+    assert "#### UI/UX Design" in text
+    assert "- [Figma — Booking flow](https://figma.com/file/XXX/booking)" in text
     # design_link with label=None renders as bare URL.
     assert "- design/booking-mockup.png" in text
 
 
 def test_ui_ux_design_block_omitted_when_empty():
-    epic = _load_outline().epics[1]  # Cancellations: empty design_links
+    """US-02 (in same epic) has empty design_links — no UI/UX H4 in its block."""
+    epic = _load_outline().epics[0]
     text = render_epic(epic, system_name="Demo", meta=_meta())
-    assert "**UI/UX Design:**" not in text
+    us02_start = text.index("### US-02")
+    snippet = text[us02_start:]
+    assert "#### UI/UX Design" not in snippet
 
 
 def test_h3_per_story():
@@ -142,16 +145,52 @@ def test_depends_on_blockquote_omitted_when_empty():
     assert "> Depends on:" not in snippet
 
 
-def test_acceptance_criteria_block():
+def test_story_description_rendered():
+    """Story.description_md sits between H3 (and optional `> Depends on:`)
+    and the task list."""
     epic = _load_outline().epics[0]
     text = render_epic(epic, system_name="Demo", meta=_meta())
-    assert "**Acceptance Criteria:**" in text
-    assert "- Map shows pins within 5 km" in text
-    assert "- Pin tap opens detail sheet" in text
+    assert "As a customer, I want to browse available courts" in text
 
 
-def test_h4_task_with_ac():
+def test_tasks_rendered_as_bullets_under_story():
+    """Tasks render as plain bullets directly under the story (before any
+    H4), not as H4 sub-headings."""
     epic = _load_outline().epics[0]
     text = render_epic(epic, system_name="Demo", meta=_meta())
-    assert "#### Render map" in text
-    assert "- use Goong tiles" in text
+    assert "- Render the map widget" in text
+    assert "- Wire location services" in text
+    # Must NOT be rendered as an H4 task heading (old format).
+    assert "#### Render the map widget" not in text
+
+
+def test_acceptance_criteria_block_as_h4():
+    epic = _load_outline().epics[0]
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    assert "#### Acceptance Criteria" in text
+    assert "- Map shows pins within 5 km of current location" in text
+    assert "- Tapping a pin opens the court detail sheet" in text
+    # Old bold-marker form must NOT be emitted.
+    assert "**Acceptance Criteria:**" not in text
+
+
+def test_acceptance_criteria_omitted_when_empty():
+    """US-02 has acceptance_criteria=[] — no AC H4 in its block."""
+    epic = _load_outline().epics[0]
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    us02_start = text.index("### US-02")
+    snippet = text[us02_start:]
+    assert "#### Acceptance Criteria" not in snippet
+
+
+def test_section_order_within_story():
+    """Within a single story block, expect order:
+       H3 → (blockquote) → description → tasks → #### AC → #### UI/UX."""
+    epic = _load_outline().epics[0]
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    us01 = text[text.index("### US-01"):text.index("### US-02")]
+    pos_desc = us01.index("As a customer")
+    pos_task = us01.index("- Render the map widget")
+    pos_ac = us01.index("#### Acceptance Criteria")
+    pos_design = us01.index("#### UI/UX Design")
+    assert pos_desc < pos_task < pos_ac < pos_design

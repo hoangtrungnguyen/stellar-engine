@@ -49,39 +49,65 @@ def test_paragraph_under_h1():
     assert "Intro paragraph" in paras[0].text
 
 
-def test_ui_ux_list_block_captured():
-    root = parse_markdown(_FIXTURE)
-    epic1 = root.children[0].children[0]
-    lists = [b for b in epic1.blocks if b.kind == "list"]
-    assert lists, "expected list block under Epic 1 (the UI/UX Design list)"
+def test_ui_ux_h4_under_story_with_link_list():
+    """UI/UX Design now lives as an H4 child of the story, not a bullet
+    list under the epic. The Figma link sits in the list block under
+    that H4."""
+    us01 = _us01()
+    h4 = [c for c in us01.children if c.heading.level == 4
+          and "ui/ux" in c.heading.text.lower()]
+    assert h4, "expected H4 'UI/UX Design' child under US-01"
+    lists = [b for b in h4[0].blocks if b.kind == "list"]
+    assert lists
     assert "Figma" in lists[0].text
 
 
-def test_acceptance_criteria_list_under_story():
-    root = parse_markdown(_FIXTURE)
-    us01 = root.children[0].children[0].children[0]
-    lists = [b for b in us01.blocks if b.kind == "list"]
+def test_acceptance_criteria_h4_under_story_with_bullets():
+    us01 = _us01()
+    h4 = [c for c in us01.children if c.heading.level == 4
+          and "acceptance" in c.heading.text.lower()]
+    assert h4, "expected H4 'Acceptance Criteria' child under US-01"
+    lists = [b for b in h4[0].blocks if b.kind == "list"]
     assert lists
     assert "Map shows pins" in lists[0].text
 
 
+def test_tasks_are_top_level_bullets_under_story():
+    """Bullets directly under H3 (before any H4) are the task list. The
+    generic markdown parser captures them as a `list` block on the
+    story Section."""
+    us01 = _us01()
+    lists = [b for b in us01.blocks if b.kind == "list"]
+    assert lists
+    assert "Render the map widget" in lists[0].text
+
+
 def test_code_block_captured():
-    root = parse_markdown(_FIXTURE)
-    us01 = root.children[0].children[0].children[0]
-    code_blocks = [b for b in us01.blocks if b.kind == "code"]
+    """Fenced code blocks survive parsing and the fence markers are
+    stripped from the captured body."""
+    us02 = _us02()
+    code_blocks = [b for b in us02.blocks if b.kind == "code"]
     assert len(code_blocks) == 1
-    assert "def render_map" in code_blocks[0].text
-    # Fence markers must be stripped from the body.
+    assert "def reserve" in code_blocks[0].text
     assert "```" not in code_blocks[0].text
 
 
 def test_table_block_captured():
-    root = parse_markdown(_FIXTURE)
-    us02 = root.children[0].children[0].children[1]
+    us02 = _us02()
     tables = [b for b in us02.blocks if b.kind == "table"]
     assert len(tables) == 1
     assert "| Field | Type |" in tables[0].text
     assert "| start | datetime |" in tables[0].text
+
+
+def _us01():
+    root = parse_markdown(_FIXTURE)
+    return root.children[0].children[0].children[0]
+
+
+def _us02():
+    root = parse_markdown(_FIXTURE)
+    return root.children[0].children[0].children[1]
 
 
 def test_anchors_are_line_numbers():

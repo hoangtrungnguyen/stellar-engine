@@ -72,22 +72,32 @@ generator_model_version: n/a
 
 <optional epic summary paragraph>
 
-**UI/UX Design:**          ← rendered iff epic.design_links is non-empty
-- [Label](https://figma.com/x)
-- design/mock.png
-
 ### <Story title>
 > Depends on: <ref1>, <ref2>   ← rendered iff story.depends_on is non-empty
 
-**Acceptance Criteria:**       ← rendered iff story.acceptance_criteria is non-empty
+<story description — e.g. "As a customer, I want…, so that…">
+
+- Task 1 title                 ← plain bullets directly under H3 = TaskNodes
+- Task 2 title
+- Task 3 title
+
+#### Acceptance Criteria       ← rendered iff story.acceptance_criteria is non-empty
 - AC bullet 1
 - AC bullet 2
 
-#### <Task title>              ← optional H4 block per task (when stories sub-divide)
-- task AC bullet
+#### UI/UX Design              ← rendered iff story.design_links is non-empty
+- [Label](https://figma.com/x)
+- design/mock.png
+- Plain-text design note (no link)
 ```
 
-The downstream task-generator parser treats bullets after `**Acceptance Criteria:**` as `story.acceptance_criteria`, not `TaskNode`s. (Note: as of this PR, the task-generator parser code does not yet honour the marker rule — its docs do, but the impl is a follow-up. AC bullets currently become tasks downstream.)
+Routing rules in the downstream task-generator parser:
+- Bullets directly under H3 (before any H4) → `TaskNode`.
+- Bullets after `#### Acceptance Criteria` H4 → `story.acceptance_criteria`.
+- Bullets after `#### UI/UX Design` (or `Design`, `UI`, `UX`) H4 → `story.design_links`.
+- A new H2 / H3 / H4 resets the active bucket.
+
+Both AC and UI/UX are **story-level** fields (not epic-level).
 
 ## Phase D — interim workflow
 
@@ -132,7 +142,7 @@ Anything else (writes outside the run directory, network calls, grava / Plane CL
 | `render.py` exit 1 — `invalid outline shape` | Hand-written outline missing required keys | Re-check against [§D2 schema](../../docs/generator/plan.md). Required: `epics[].title`, `epics[].stories[].title`, `confidence`. |
 | `render.py` exit 2 — `cannot write drafts` | Disk full / readonly | Surface the OSError; reroute via `--drafts-root`. |
 | Diff printed unexpectedly large | Source doc materially changed | Read `diff.json`; decide whether to promote anyway, edit `outline.json`, or roll back to the prior run's drafts. |
-| Drafts render but task-generator parser sees AC bullets as tasks | Known limitation: task-generator parser code doesn't yet implement the `**Acceptance Criteria:**` marker rule | Tracked as a follow-up. Format spec in [docs/task-generator/parser.md](../../docs/task-generator/parser.md) is correct; downstream wiring lags. |
+| Drafts render but downstream Plane work items don't match the story format | task-generator's parser must be rebuilt against the new H4 routing | Confirm `agents/task-generator/parser.py` is from the same branch as the generator. The H4 rules (`Acceptance Criteria` / `UI/UX Design`) landed together in PR #12. |
 | Missing Python deps | `markdown`, `markdownify`, `requests`, `pyyaml` not installed | Run `bash setup.sh` from the stellar-engine root. |
 
 ## See also

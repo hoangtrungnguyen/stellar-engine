@@ -165,20 +165,26 @@ class Section:
   {
     "epics": [
       {"title": "...", "summary": "...", "source_anchors": ["..."],
-       "design_links": [
-         {"label": "Figma — Booking flow", "url": "https://figma.com/file/XXX/booking"},
-         {"label": null, "url": "design/booking-mockup.png"}
-       ],
        "stories": [
-         {"title": "...", "depends_on": [], "source_anchors": ["..."],
-          "acceptance_criteria": ["...", "..."],
-          "tasks": [{"title": "...", "ac": ["..."]}]}
+         {"title": "...",
+          "description_md": "As a stakeholder, I want…, so that…",
+          "depends_on": [],
+          "source_anchors": ["..."],
+          "tasks": ["Task 1 title", "Task 2 title"],
+          "acceptance_criteria": ["Criterion 1", "Criterion 2"],
+          "design_links": [
+            {"label": "Figma — Booking flow", "url": "https://figma.com/file/XXX/booking"},
+            {"label": null, "url": "design/booking-mockup.png"}
+          ]}
        ]}
     ],
     "confidence": 0.78
   }
   ```
-  `design_links` is optional; empty list / omitted = no UI/UX section rendered. Each entry: `{label, url}`. `label` null → render as bare URL or path.
+  - `tasks` is a list of strings (titles only). Each becomes a `TaskNode` and a Plane task work item downstream.
+  - `acceptance_criteria` is a list of strings, story-level criteria.
+  - `design_links` is optional; empty list / omitted = no UI/UX section rendered. Each entry: `{label, url}`. `label` null → render as a bare URL or path.
+  - Both `acceptance_criteria` and `design_links` are now **story-level** fields (was epic-level for `design_links` in earlier drafts).
 - Operator paste the IR sections + the schema above into a Claude Code session and asks for matching JSON.
 
 **D3. `cli/outline.py`** *(future)*.
@@ -202,27 +208,35 @@ class Section:
 - Body structure:
   - H1 = system name.
   - H2 per epic.
-  - Under each H2, before stories: a **`**UI/UX Design:**`** line listing one or more links (Figma, design-doc URL, image path). Omitted when `epic.design_links` is empty.
-  - H3 per story (with `> Depends on:` blockquote when set).
-  - Under each H3, after the story description: an **`**Acceptance Criteria:**`** marker line followed by a bullet list. Each bullet is one criterion. The downstream task-generator parser ([docs/task-generator/parser.md](../task-generator/parser.md)) treats bullets after this marker as `story.acceptance_criteria` — not tasks.
-  - H4 per task with AC bullets *(optional, used only when stories sub-divide into work items)*.
-- Example epic block:
+  - H3 per story (with `> Depends on: …` blockquote when set).
+  - Story description paragraph (e.g. "As a … I want … so that …") immediately after H3 / blockquote.
+  - Plain bullet list directly under the story = tasks.
+  - `#### Acceptance Criteria` H4 subsection (rendered iff `story.acceptance_criteria` non-empty) with one bullet per criterion.
+  - `#### UI/UX Design` H4 subsection (rendered iff `story.design_links` non-empty) with one bullet per link (`[Label](url)` or bare URL/path).
+  - The downstream task-generator parser ([docs/task-generator/parser.md](../task-generator/parser.md)) maps H4 sections by heading text:
+    - `Acceptance Criteria` → `story.acceptance_criteria`
+    - `UI/UX Design` (or `Design`, `UX`, `UI`) → `story.design_links`
+    - Bullets *before* any H4 → `TaskNode`s.
+- Example story block:
   ```markdown
   ## Epic 1: Court Booking
 
-  **UI/UX Design:**
-  - [Figma — Booking flow](https://figma.com/file/XXX/booking)
-  - `design/booking-mockup.png`
-
   ### US-01 — Pick a court
-  **As a** customer,
-  **I want to** browse available courts on a map,
-  **so that** I can pick one near me.
+  As a customer, I want to browse available courts, so that I can pick one near me.
 
-  **Acceptance Criteria:**
-  - Map shows courts within a 5 km radius of current location
+  - Render the map widget
+  - Wire location services
+  - Fetch courts within radius
+
+  #### Acceptance Criteria
+  - Map shows pins within 5 km of current location
   - Pin colour reflects availability (green = open, red = booked)
   - Tapping a pin opens the court detail sheet
+
+  #### UI/UX Design
+  - [Figma — Booking flow](https://figma.com/file/XXX/booking)
+  - `design/booking-mockup.png`
+  - Map pin shape: 32×40px teardrop, white 1.5px outline
   ```
 
 **E2. `cli/render.py`.** ✅ Reads `<work-dir>/outline.json` (or envelope `{run_id, source, outline}`), writes `<work-dir>/drafts/*.md` plus `<work-dir>/manifest.json`. Exit codes: 0 / 1 (missing or invalid outline) / 2 (write error).

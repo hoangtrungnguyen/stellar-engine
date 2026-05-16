@@ -16,12 +16,19 @@ class TaskNode:
     related_refs: list[str] = field(default_factory=list)
 
 @dataclass
+class DesignLink:
+    url: str
+    label: str | None = None
+
+
+@dataclass
 class StoryNode:
     title: str
     description_md: str
     type_marker: str | None
     tasks: list[TaskNode] = field(default_factory=list)
     acceptance_criteria: list[str] = field(default_factory=list)
+    design_links: list[DesignLink] = field(default_factory=list)
     related_refs: list[str] = field(default_factory=list)
 
 @dataclass

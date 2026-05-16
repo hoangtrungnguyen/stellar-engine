@@ -61,17 +61,18 @@ def test_outline_roundtrip_full():
                 title="Court Booking",
                 summary="Pick + reserve",
                 source_anchors=["L12"],
-                design_links=[
-                    DesignLink(url="https://figma.com/x", label="Figma flow"),
-                    DesignLink(url="design/mock.png"),
-                ],
                 stories=[
                     Story(
                         title="Pick a court",
+                        description_md="As a customer, I want…",
                         depends_on=["auth"],
                         source_anchors=["L20"],
+                        tasks=[Task(title="Render map"), Task(title="Wire location")],
                         acceptance_criteria=["Map shows pins", "Pin tap opens sheet"],
-                        tasks=[Task(title="Render map", ac=["use Goong tiles"])],
+                        design_links=[
+                            DesignLink(url="https://figma.com/x", label="Figma flow"),
+                            DesignLink(url="design/mock.png"),
+                        ],
                     )
                 ],
             )
@@ -81,6 +82,41 @@ def test_outline_roundtrip_full():
     d = asdict(o)
     o2 = outline_from_dict(json.loads(json.dumps(d)))
     assert o2 == o
+
+
+def test_outline_accepts_string_tasks():
+    """Hand-written outlines often use bare strings for tasks; the loader
+    should accept them and produce Task(title=...)."""
+    raw = {
+        "epics": [{
+            "title": "E",
+            "stories": [{
+                "title": "S",
+                "tasks": ["task one", "task two"],
+            }],
+        }],
+        "confidence": 0.5,
+    }
+    o = outline_from_dict(raw)
+    titles = [t.title for t in o.epics[0].stories[0].tasks]
+    assert titles == ["task one", "task two"]
+
+
+def test_outline_accepts_dict_tasks():
+    """Loader also accepts the verbose {title: ...} form."""
+    raw = {
+        "epics": [{
+            "title": "E",
+            "stories": [{
+                "title": "S",
+                "tasks": [{"title": "task one"}, {"title": "task two"}],
+            }],
+        }],
+        "confidence": 0.5,
+    }
+    o = outline_from_dict(raw)
+    titles = [t.title for t in o.epics[0].stories[0].tasks]
+    assert titles == ["task one", "task two"]
 
 
 def test_design_link_label_none_serialises():

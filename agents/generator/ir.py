@@ -54,16 +54,17 @@ class DesignLink:
 @dataclass
 class Task:
     title: str
-    ac: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Story:
     title: str
+    description_md: str = ""
     depends_on: list[str] = field(default_factory=list)
     source_anchors: list[str] = field(default_factory=list)
-    acceptance_criteria: list[str] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
+    acceptance_criteria: list[str] = field(default_factory=list)
+    design_links: list[DesignLink] = field(default_factory=list)
 
 
 @dataclass
@@ -71,7 +72,6 @@ class Epic:
     title: str
     summary: str = ""
     source_anchors: list[str] = field(default_factory=list)
-    design_links: list[DesignLink] = field(default_factory=list)
     stories: list[Story] = field(default_factory=list)
 
 
@@ -93,22 +93,32 @@ def section_from_dict(d: dict[str, Any]) -> Section:
 
 
 def outline_from_dict(d: dict[str, Any]) -> Outline:
+    def _task(t: Any) -> Task:
+        # Accept either a plain string ("Task title") or a dict {"title": …}
+        # so hand-written outlines can use the simpler shape.
+        if isinstance(t, str):
+            return Task(title=t)
+        if isinstance(t, dict):
+            return Task(title=t["title"])
+        raise TypeError(f"task entry must be str or dict, got {type(t).__name__}")
+
+    def _story(s: dict[str, Any]) -> Story:
+        return Story(
+            title=s["title"],
+            description_md=s.get("description_md", ""),
+            depends_on=list(s.get("depends_on", [])),
+            source_anchors=list(s.get("source_anchors", [])),
+            tasks=[_task(t) for t in s.get("tasks", [])],
+            acceptance_criteria=list(s.get("acceptance_criteria", [])),
+            design_links=[DesignLink(**dl) for dl in s.get("design_links", [])],
+        )
+
     def _epic(e: dict[str, Any]) -> Epic:
         return Epic(
             title=e["title"],
             summary=e.get("summary", ""),
             source_anchors=list(e.get("source_anchors", [])),
-            design_links=[DesignLink(**dl) for dl in e.get("design_links", [])],
-            stories=[
-                Story(
-                    title=s["title"],
-                    depends_on=list(s.get("depends_on", [])),
-                    source_anchors=list(s.get("source_anchors", [])),
-                    acceptance_criteria=list(s.get("acceptance_criteria", [])),
-                    tasks=[Task(**t) for t in s.get("tasks", [])],
-                )
-                for s in e.get("stories", [])
-            ],
+            stories=[_story(s) for s in e.get("stories", [])],
         )
 
     return Outline(
