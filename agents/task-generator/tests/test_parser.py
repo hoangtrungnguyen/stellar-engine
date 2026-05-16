@@ -127,9 +127,11 @@ def test_no_h2_warns():
     assert "no_h2" in kinds
 
 
-def test_h4_headings_become_tasks():
-    """H4 entries under an H3 story become tasks (not silently dropped into
-    the story description)."""
+def test_h4_buckets_route_into_typed_story_fields():
+    """H4 subsections under a story route bullets into typed buckets:
+    'Acceptance Criteria' → story.acceptance_criteria; 'UI/UX Design'
+    → story.design_links; bullets *before* any H4 → TaskNode. Unknown
+    H4 names emit a warning and fold bullets into description."""
     epics, warnings = parse(_load("10_h4_tasks.md"), "https://x", "abc")
     assert len(epics) == 1
     epic = epics[0]
@@ -138,21 +140,79 @@ def test_h4_headings_become_tasks():
 
     story1 = epic.stories[0]
     assert story1.title == "Build login endpoint"
-    task_titles = [t.title for t in story1.tasks]
-    assert task_titles == ["Add token expiry probe", "rotate refresh tokens"]
-    markers = {t.title: t.type_marker for t in story1.tasks}
-    assert markers["Add token expiry probe"] is None
-    assert markers["rotate refresh tokens"] == "Bug"
-    descriptions = {t.title: t.description_md for t in story1.tasks}
-    assert "Cron job description here." in descriptions["Add token expiry probe"]
-    assert "Refresh rotation detail." in descriptions["rotate refresh tokens"]
-    # H4 content must NOT bleed into the story description.
-    assert "Add token expiry probe" not in story1.description_md
-    assert "Cron job description here." not in story1.description_md
+    # Description carries the user-story narrative.
+    assert "As a user, I want to log in" in story1.description_md
 
+    # Pre-H4 bullets are tasks.
+    task_titles = [t.title for t in story1.tasks]
+    assert task_titles == [
+        "Implement password hashing",
+        "Wire login form",
+        "Issue session token",
+    ]
+    # Acceptance Criteria bullets land in the typed field — NOT as tasks.
+    assert story1.acceptance_criteria == [
+        "Failed login shows a generic error",
+        "Session persists across browser close",
+        "Password is bcrypt-hashed before storage",
+    ]
+    # UI/UX Design bullets become DesignLinks.
+    assert len(story1.design_links) == 3
+    assert story1.design_links[0].label == "Figma — Login flow"
+    assert story1.design_links[0].url == "https://figma.com/file/login"
+    # Bare path → label=None.
+    assert story1.design_links[1].label is None
+    assert story1.design_links[1].url == "design/login-mockup.png"
+    # Plain text → label=None, url=text.
+    assert story1.design_links[2].label is None
+    assert "brand-primary CTA" in story1.design_links[2].url
+
+    # Story 2 has tasks + an unknown H4 ('Notes') that emits a warning.
     story2 = epic.stories[1]
     assert story2.title == "Build logout endpoint"
     assert [t.title for t in story2.tasks] == ["bullet task one", "bullet task two"]
+    # Bullets under the 'Notes' H4 must NOT become tasks.
+    assert "arbitrary content" not in [t.title for t in story2.tasks]
+    assert any(w.kind == "unknown_section" and "Notes" in w.detail for w in warnings)
+
+
+def test_h4_bucket_case_insensitive():
+    """Bucket recognition tolerates case + trailing-colon variants."""
+    md = (
+        "# Title\n"
+        "## Epic\n"
+        "### Story\n\n"
+        "- a task\n\n"
+        "#### acceptance criteria:\n"
+        "- AC one\n\n"
+        "#### design\n"
+        "- design note\n"
+    )
+    epics, _ = parse(md, "https://x", "abc")
+    s = epics[0].stories[0]
+    assert [t.title for t in s.tasks] == ["a task"]
+    assert s.acceptance_criteria == ["AC one"]
+    assert len(s.design_links) == 1
+
+
+def test_new_h2_or_h3_ends_active_h4_bucket():
+    """A new H2 or H3 must reset the H4 bucket — bullets after the next
+    H3 become tasks again, not criteria from the previous story."""
+    md = (
+        "# T\n"
+        "## E\n"
+        "### S1\n\n"
+        "#### Acceptance Criteria\n"
+        "- AC for S1\n\n"
+        "### S2\n"
+        "- task for S2\n"
+    )
+    epics, _ = parse(md, "https://x", "abc")
+    s1, s2 = epics[0].stories
+    assert s1.acceptance_criteria == ["AC for S1"]
+    assert s1.tasks == []
+    assert [t.title for t in s2.tasks] == ["task for S2"]
+    assert s2.acceptance_criteria == []
 
 
 def test_strip_type_marker_unit():

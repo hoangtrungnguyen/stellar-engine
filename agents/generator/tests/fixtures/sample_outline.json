@@ -4,37 +4,42 @@
       "title": "Court Booking",
       "summary": "Pick + reserve a court.",
       "source_anchors": ["L5"],
-      "design_links": [
-        {"label": "Figma — Booking flow", "url": "https://figma.com/x"},
-        {"label": null, "url": "design/booking-mockup.png"}
-      ],
       "stories": [
         {
           "title": "US-01 — Pick a court",
+          "description_md": "As a customer, I want to browse available courts on a map, so that I can pick one near me.",
           "depends_on": ["auth"],
-          "source_anchors": ["L11"],
-          "acceptance_criteria": [
-            "Map shows pins within 5 km",
-            "Pin tap opens detail sheet"
-          ],
+          "source_anchors": ["L7"],
           "tasks": [
-            {"title": "Render map", "ac": ["use Goong tiles"]}
+            "Render the map widget",
+            "Wire location services",
+            "Fetch courts within radius"
+          ],
+          "acceptance_criteria": [
+            "Map shows pins within 5 km of current location",
+            "Pin colour reflects availability",
+            "Tapping a pin opens the court detail sheet"
+          ],
+          "design_links": [
+            {"label": "Figma — Booking flow", "url": "https://figma.com/file/XXX/booking"},
+            {"label": null, "url": "design/booking-mockup.png"}
           ]
         },
         {
           "title": "US-02 — Reserve a court",
+          "description_md": "As a customer, I want to reserve a slot, so that the court is held for me.",
           "depends_on": [],
-          "source_anchors": ["L23"],
+          "source_anchors": ["L26"],
+          "tasks": ["Confirm slot via SELECT FOR UPDATE", "Send confirmation email"],
           "acceptance_criteria": [],
-          "tasks": []
+          "design_links": []
         }
       ]
     },
     {
       "title": "Cancellations",
       "summary": "Refund window + audit log.",
-      "source_anchors": ["L30"],
-      "design_links": [],
+      "source_anchors": ["L35"],
       "stories": []
     }
   ],

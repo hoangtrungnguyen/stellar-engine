@@ -6,18 +6,39 @@ import re
 
 from markdownify import markdownify
 
-from ir import EpicNode, ParseWarning, StoryNode, TaskNode
+from ir import DesignLink, EpicNode, ParseWarning, StoryNode, TaskNode
 
 _TYPE_MARKER_RE = re.compile(r"^(Bug|P0|P1|Spike):\s+(.*)$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 _FENCE_RE = re.compile(r"^(```|~~~)")
+_LINK_RE = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
 
 _SPECIAL_SECTIONS = {
     "out of scope": "out_of_scope",
     "open questions": "open_questions",
     "risks": "risks",
 }
+
+# Story-level H4 subsection labels — values are the bucket name.
+_H4_BUCKETS = {
+    "acceptance criteria": "ac",
+    "acceptance criterion": "ac",
+    "ui/ux design": "design",
+    "ui/ux": "design",
+    "uiux design": "design",
+    "design": "design",
+    "ui": "design",
+    "ux": "design",
+}
+
+
+def _parse_design_link(text: str) -> DesignLink:
+    """Bullet text → DesignLink. `[Label](url)` → labelled; anything else → bare."""
+    m = _LINK_RE.match(text.strip())
+    if m:
+        return DesignLink(url=m.group(2), label=m.group(1))
+    return DesignLink(url=text, label=None)
 
 
 def html_to_markdown(html: str) -> str:
@@ -91,9 +112,10 @@ def parse(
     epic: EpicNode | None = None
     page_title: str | None = None
     current_story: StoryNode | None = None
-    current_task: TaskNode | None = None
     current_section = "default"
     section_level: int | None = None
+    # Story-level H4 bucket: None (tasks mode) | "ac" | "design" | "unknown"
+    h4_bucket: str | None = None
     warnings: list[ParseWarning] = []
     pending_lines: list[str] = []
     pending_target: str | None = None
@@ -110,8 +132,6 @@ def parse(
             epic.description_md = _append_md(epic.description_md, text)
         elif pending_target == "story" and current_story is not None:
             current_story.description_md = _append_md(current_story.description_md, text)
-        elif pending_target == "task" and current_task is not None:
-            current_task.description_md = _append_md(current_task.description_md, text)
 
     for line in md_clean.splitlines():
         h_match = _HEADING_RE.match(line)
@@ -120,7 +140,7 @@ def parse(
         if h_match:
             level = len(h_match.group(1))
             text = h_match.group(2).strip()
-            normalized = text.lower()
+            normalized = text.lower().rstrip(":").strip()
 
             if current_section != "default" and section_level is not None and level <= section_level:
                 flush()
@@ -132,12 +152,16 @@ def parse(
                 current_section = _SPECIAL_SECTIONS[normalized]
                 section_level = level
                 current_story = None
-                current_task = None
+                h4_bucket = None
                 pending_target = None
                 continue
 
             if current_section == "out_of_scope":
                 continue
+
+            # Any H1/H2/H3 ends the active H4 bucket.
+            if level <= 3:
+                h4_bucket = None
 
             if level == 1:
                 flush()
@@ -156,7 +180,6 @@ def parse(
                 )
                 epics.append(epic)
                 current_story = None
-                current_task = None
                 pending_target = "epic"
                 continue
 
@@ -188,25 +211,31 @@ def parse(
                 )
                 epic.stories.append(story)
                 current_story = story
-                current_task = None
                 pending_target = "story"
                 continue
 
             if level == 4:
+                # H4 under a story switches to a typed bucket. Bullets that
+                # follow are routed into the matching StoryNode field — they
+                # are NOT TaskNodes. H4 with no story context falls through
+                # to pending_lines (folded into the nearest parent).
                 if current_story is None:
                     pending_lines.append(line)
                     continue
                 flush()
-                title, type_marker = _strip_type_marker(text)
-                task = TaskNode(
-                    title=title,
-                    description_md="",
-                    type_marker=type_marker,
-                    related_refs=ref_re.findall(title),
-                )
-                current_story.tasks.append(task)
-                current_task = task
-                pending_target = "task"
+                bucket = _H4_BUCKETS.get(normalized)
+                if bucket is not None:
+                    h4_bucket = bucket
+                else:
+                    h4_bucket = "unknown"
+                    warnings.append(ParseWarning(
+                        kind="unknown_section",
+                        detail=(
+                            f"Unknown H4 '{text}' under story "
+                            f"'{current_story.title}'; bullets will be folded "
+                            "into the story description."
+                        ),
+                    ))
                 continue
 
             pending_lines.append(line)
@@ -227,6 +256,21 @@ def parse(
             if current_story is None:
                 pending_lines.append(line)
                 continue
+
+            # Route bullets based on the active H4 bucket. Inside an
+            # AC/design bucket: bullets are criteria/links. Otherwise:
+            # bullets are TaskNodes.
+            if h4_bucket == "ac":
+                current_story.acceptance_criteria.append(text)
+                continue
+            if h4_bucket == "design":
+                current_story.design_links.append(_parse_design_link(text))
+                continue
+            if h4_bucket == "unknown":
+                pending_lines.append(line)
+                continue
+
+            # No active H4: bullet → TaskNode.
             flush()
             title, type_marker = _strip_type_marker(text)
             task = TaskNode(
@@ -236,8 +280,6 @@ def parse(
                 related_refs=ref_re.findall(title),
             )
             current_story.tasks.append(task)
-            current_task = task
-            pending_target = "task"
             continue
 
         if current_section == "out_of_scope":

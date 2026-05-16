@@ -74,16 +74,18 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
          "title": "...",
          "summary": "...",
          "source_anchors": ["..."],
-         "design_links": [
-           {"label": "Figma — Booking flow", "url": "https://figma.com/..."}
-         ],
          "stories": [
            {
              "title": "...",
+             "description_md": "As a stakeholder, I want…, so that…",
              "depends_on": [],
              "source_anchors": ["..."],
-             "acceptance_criteria": ["...", "..."],
-             "tasks": [{"title": "...", "ac": ["..."]}]
+             "tasks": ["Task 1 title", "Task 2 title"],
+             "acceptance_criteria": ["Criterion 1", "Criterion 2"],
+             "design_links": [
+               {"label": "Figma — Booking flow", "url": "https://figma.com/..."},
+               {"label": null, "url": "design/mockup.png"}
+             ]
            }
          ]
        }
@@ -91,7 +93,10 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
      "confidence": 0.78
    }
    ```
-   `design_links` is optional. `acceptance_criteria` is required when the source has them. `tasks` are optional H4 work items per story.
+   - `tasks` is a list of strings (titles only). Each becomes a `TaskNode` + a Plane task work item downstream.
+   - `acceptance_criteria` is a list of strings — story-level criteria.
+   - `design_links` is optional. Each entry is `{label, url}`; `label: null` renders as a bare URL/path.
+   - Both `acceptance_criteria` and `design_links` are **story-level** (not epic-level).
 3. Save the JSON to the run directory:
    ```bash
    $EDITOR drafts/STELL/runs/20260516T120937Z/outline.json
@@ -223,7 +228,6 @@ For Step 5: re-upload the same promoted file. `upload_project_pages.py` uses the
 | `ERROR: outline.json not found` (render step) | Run dir is empty | Same as above. |
 | `ERROR: invalid outline shape` | Hand-written outline missing required keys | Open `outline.json`, ensure `epics[].title`, `epics[].stories[].title`, and `confidence` are present. Compare against the schema in [plan.md §D2](plan.md). |
 | Frontmatter appears as a visible block on the Plane page | Known limitation — see below | Strip frontmatter manually before upload, or open a PR to add `--strip-frontmatter` to `upload_project_pages.py`. |
-| Acceptance Criteria bullets show up as Plane tasks | Known limitation in task-generator's parser — see below | Manually delete the stray task work items in Plane, or wait for the task-generator parser fix. |
 | `se doctor` shows `python: markdown ✗` or similar | Missing pip deps | `bash setup.sh` to install. |
 
 ---
@@ -232,13 +236,11 @@ For Step 5: re-upload the same promoted file. `upload_project_pages.py` uses the
 
 1. **Plane page frontmatter.** `upload_project_pages.py` does not strip the generator's YAML frontmatter before HTML conversion. It appears at the top of the Plane page as an `<hr>`-bounded paragraph block. task-generator's parser ignores it (parses from H2), but it's visible to humans. Tracked as a deferred item in [`docs/generator/plan.md` §1](plan.md).
 
-2. **Acceptance Criteria → tasks downstream.** The output format spec ([`docs/task-generator/parser.md`](../task-generator/parser.md)) defines that bullets after a `**Acceptance Criteria:**` marker map to `story.acceptance_criteria`, **not** `TaskNode`s. The format is rendered correctly. But task-generator's parser code (`agents/task-generator/parser.py`) doesn't yet honour the marker rule — so AC bullets end up as Plane task work items. Format ahead of impl; follow-up ticket to wire the parser.
+2. **Phase D deferred.** No automated LLM outline today. Use the manual Claude Code session workflow in Step 2.
 
-3. **Phase D deferred.** No automated LLM outline today. Use the manual Claude Code session workflow in Step 2.
+3. **Single source per run.** No multi-document synthesis. One markdown file in, one or more spec drafts out.
 
-4. **Single source per run.** No multi-document synthesis. One markdown file in, one or more spec drafts out.
-
-5. **No auto-promotion.** The operator copies a chosen draft into `systems/<Name>/business/` by hand (Step 4). This is by design — the human in the loop is the review gate.
+4. **No auto-promotion.** The operator copies a chosen draft into `systems/<Name>/business/` by hand (Step 4). This is by design — the human in the loop is the review gate.
 
 ---
 

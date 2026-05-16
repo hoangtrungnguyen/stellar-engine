@@ -76,20 +76,29 @@ generator_model_version: n/a
 
 <epic summary>
 
-**UI/UX Design:**            ← rendered iff epic.design_links non-empty
-- [Label](https://figma.com/x)
-- design/mock.png
-
 ### <Story title>
 > Depends on: <ref>          ← rendered iff story.depends_on non-empty
 
-**Acceptance Criteria:**     ← rendered iff story.acceptance_criteria non-empty
+<story description — e.g. "As a customer, I want…, so that…">
+
+- Task 1                     ← plain bullets directly under H3 = tasks
+- Task 2
+- Task 3
+
+#### Acceptance Criteria     ← rendered iff story.acceptance_criteria non-empty
 - AC bullet 1
 - AC bullet 2
 
-#### <Task title>            ← optional, when stories sub-divide
-- task AC bullet
+#### UI/UX Design            ← rendered iff story.design_links non-empty
+- [Label](https://figma.com/x)
+- design/mock.png
+- Plain-text design note
 ```
+
+Routing rules (downstream parser):
+- Bullets *before* any H4 = `TaskNode`s.
+- `#### Acceptance Criteria` H4 → bullets become `story.acceptance_criteria`.
+- `#### UI/UX Design` (or `Design` / `UI` / `UX`) H4 → bullets become `story.design_links`.
 
 ## Diff on re-run
 

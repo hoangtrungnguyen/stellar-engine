@@ -4,12 +4,13 @@ The output format is the contract consumed by `agents/task-generator/parser.py`
 (see `docs/task-generator/parser.md` and `docs/generator/plan.md` §E1):
 
   - H1 = system name
-  - H2 per epic
-  - Optional `**UI/UX Design:**` bullet list under H2 when `epic.design_links`
-    is non-empty
-  - H3 per story, optional `> Depends on: …` blockquote when story has deps
-  - `**Acceptance Criteria:**` marker + bullet list under H3 when set
-  - Optional H4 per task with AC bullets
+  - H2 per epic, optional summary paragraph
+  - H3 per story; optional `> Depends on: …` blockquote when story has deps
+  - Story description paragraph (e.g. "As a … I want … so that …")
+  - Plain bullet list directly under the story = tasks
+  - `#### Acceptance Criteria` H4 subsection (when set) with one bullet
+    per criterion
+  - `#### UI/UX Design` H4 subsection (when set) with one bullet per link
 
 Frontmatter keys: `generator_source`, `generator_run_id`,
 `generator_confidence`, `generator_model`, `generator_model_version`.
@@ -75,8 +76,6 @@ def render_epic(epic: Epic, *, system_name: str, meta: RenderMeta) -> str:
     ]
     if epic.summary:
         parts.extend(["", epic.summary])
-    if epic.design_links:
-        parts.extend(["", _design_block(epic.design_links)])
     for story in epic.stories:
         parts.extend(["", _story_block(story)])
     parts.append("")  # trailing newline
@@ -107,34 +106,31 @@ def _frontmatter(meta: RenderMeta) -> str:
     return "\n".join(lines)
 
 
-def _design_block(links: list[DesignLink]) -> str:
-    bullets: list[str] = ["**UI/UX Design:**"]
-    for dl in links:
-        if dl.label:
-            bullets.append(f"- [{dl.label}]({dl.url})")
-        else:
-            bullets.append(f"- {dl.url}")
-    return "\n".join(bullets)
-
-
 def _story_block(story: Story) -> str:
     parts: list[str] = [f"### {story.title}"]
     if story.depends_on:
         parts.append(f"> Depends on: {', '.join(story.depends_on)}")
+    if story.description_md:
+        parts.append("")
+        parts.append(story.description_md)
+    if story.tasks:
+        parts.append("")
+        for task in story.tasks:
+            parts.append(f"- {task.title}")
     if story.acceptance_criteria:
         parts.append("")
-        parts.append("**Acceptance Criteria:**")
+        parts.append("#### Acceptance Criteria")
         for ac in story.acceptance_criteria:
             parts.append(f"- {ac}")
-    for task in story.tasks:
+    if story.design_links:
         parts.append("")
-        parts.append(_task_block(task))
+        parts.append("#### UI/UX Design")
+        for dl in story.design_links:
+            parts.append(_design_link_bullet(dl))
     return "\n".join(parts)
 
 
-def _task_block(task: Task) -> str:
-    parts: list[str] = [f"#### {task.title}"]
-    if task.ac:
-        for ac in task.ac:
-            parts.append(f"- {ac}")
-    return "\n".join(parts)
+def _design_link_bullet(dl: DesignLink) -> str:
+    if dl.label:
+        return f"- [{dl.label}]({dl.url})"
+    return f"- {dl.url}"

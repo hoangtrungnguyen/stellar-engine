@@ -70,9 +70,10 @@ def test_malformed_outline_json_exits_1(tmp_path, capsys):
 
 
 def test_invalid_outline_shape_exits_1(tmp_path, capsys):
+    """Story dict missing the required `title` key → exit 1 with helpful msg."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "outline.json").write_text(json.dumps(
-        {"epics": [{"title": "X", "stories": [{"title": "S", "tasks": "not-a-list"}]}]}
+        {"epics": [{"title": "X", "stories": [{"depends_on": []}]}]}
     ))
     rc = render_cli.main([
         "--work-dir", str(tmp_path),
