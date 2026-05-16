@@ -14,9 +14,11 @@
 set -euo pipefail
 
 VERSION="${SE_VERSION:-}"
+TARGET_ARCH="${SE_TARGET_ARCH:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --version) VERSION="$2"; shift 2 ;;
+        --version)  VERSION="$2";     shift 2 ;;
+        --arch)     TARGET_ARCH="$2"; shift 2 ;;
         -h|--help)
             sed -n '2,15p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
@@ -65,19 +67,25 @@ case "$OS" in
     *) echo "unsupported OS: $OS (macOS only for now)" >&2; exit 1 ;;
 esac
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-    x86_64|amd64) ARCH_TAG="x64" ;;
-    arm64|aarch64) ARCH_TAG="arm64" ;;
-    *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
+HOST_ARCH="$(uname -m)"
+# Default target = host. --arch (or SE_TARGET_ARCH) overrides.
+if [ -z "$TARGET_ARCH" ]; then
+    TARGET_ARCH="$HOST_ARCH"
+fi
+case "$TARGET_ARCH" in
+    x86_64|amd64|x64) ARCH_TAG="x64";   PYI_ARCH="x86_64" ;;
+    arm64|aarch64)    ARCH_TAG="arm64"; PYI_ARCH="arm64"  ;;
+    *) echo "unsupported arch: $TARGET_ARCH" >&2; exit 1 ;;
 esac
 
 NAME="se-${OS_TAG}-${ARCH_TAG}"
 
-echo "▸ building $NAME"
+echo "▸ building $NAME (host $HOST_ARCH, target $PYI_ARCH)"
 
 # ── venv ──────────────────────────────────────────────────────────────────────
-VENV="$REPO_ROOT/.build-venv"
+# Per-target venv so binary deps (`.dylib`s from pyyaml etc.) match the
+# requested arch when we cross-compile via universal2 Python.
+VENV="$REPO_ROOT/.build-venv-$ARCH_TAG"
 if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
 fi
@@ -85,7 +93,19 @@ fi
 source "$VENV/bin/activate"
 
 pip install --quiet --upgrade pip
-pip install --quiet pyinstaller pyyaml markdown markdownify requests
+# When cross-compiling (host != target) we need x86_64 wheels even though
+# pip would resolve arm64 by default. `--platform` forces wheel selection.
+if [ "$HOST_ARCH" != "$PYI_ARCH" ] && [ "$PYI_ARCH" = "x86_64" ]; then
+    pip install --quiet pyinstaller
+    pip install --quiet \
+        --platform macosx_10_9_x86_64 \
+        --only-binary=:all: \
+        --target "$VENV/lib/cross-x86_64" \
+        pyyaml markdown markdownify requests
+    export PYTHONPATH="$VENV/lib/cross-x86_64:${PYTHONPATH:-}"
+else
+    pip install --quiet pyinstaller pyyaml markdown markdownify requests
+fi
 
 # ── data bundling ─────────────────────────────────────────────────────────────
 #
@@ -110,6 +130,7 @@ pyinstaller \
     --noconfirm \
     --onefile \
     --name "se" \
+    --target-arch "$PYI_ARCH" \
     --distpath "$REPO_ROOT/dist/$NAME" \
     --workpath "$REPO_ROOT/build/$NAME" \
     --specpath "$REPO_ROOT/build/$NAME" \
@@ -122,8 +143,16 @@ pyinstaller \
 
 # ── smoke test ────────────────────────────────────────────────────────────────
 BIN="$REPO_ROOT/dist/$NAME/se"
-"$BIN" --help >/dev/null
-echo "✓ binary runs: $BIN"
+# Only smoke-test natively. A cross-built x86_64 binary on Apple Silicon
+# needs Rosetta 2 — present on GH `macos-14` runners but skip the test
+# rather than depend on it.
+if [ "$HOST_ARCH" = "$PYI_ARCH" ] || \
+   ([ "$HOST_ARCH" = "arm64" ] && [ "$PYI_ARCH" = "x86_64" ] && command -v arch >/dev/null && arch -x86_64 true 2>/dev/null); then
+    "$BIN" --help >/dev/null
+    echo "✓ binary runs: $BIN"
+else
+    echo "⚠ skipping smoke test (cross-build, no Rosetta): $BIN"
+fi
 
 # ── package ───────────────────────────────────────────────────────────────────
 ( cd "$REPO_ROOT/dist" && tar -czf "$NAME.tar.gz" -C "$NAME" se )
