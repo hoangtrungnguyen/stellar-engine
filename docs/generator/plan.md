@@ -1,6 +1,6 @@
 # Generator Agent — Implementation Plan
 
-**Status:** Phase A ✅ · Phase B ✅ · Phase E ✅ · Phase F next (D deferred) · **Last updated:** 2026-05-16
+**Status:** Phase A ✅ · Phase B ✅ · Phase E ✅ · Phase F ✅ · Phase G optional (D deferred) · **Last updated:** 2026-05-16
 
 This plan covers the **CLI scaffold + minimal markdown extract/render MVP** for the Generator agent — enough to take one markdown source file and emit one spec draft, end-to-end. The agent translates a document into reviewable spec markdown files under `drafts/<system>/`; it never writes to Plane or grava directly.
 
@@ -251,24 +251,20 @@ class Section:
 
 **Verify:** ✅ `pytest agents/generator/tests/` → **93 passed**. End-to-end: `python3 cli/se generate agents/generator/tests/fixtures/sample.md --project demo --drafts-root /tmp/se-gen-e2e/drafts --run-id RID-1 --system-name "Demo System"` (with `outline.json` pre-seeded) emits two valid drafts. task-generator parser accepts the result with zero warnings.
 
-### Phase F — Operator polish
+### Phase F — Operator polish — ✅ DONE (2026-05-16)
 
-**F1. Add `drafts/` to `.gitignore`.**
+> Landed: `drafts/` in `.gitignore`; `setup.sh` installs `markdownify` + prints `.env` setup hint + adds `se generate` / `se download` to the quick-reference footer; `agents/generator/AGENT.md` fleshed out with the three-step pipeline, output format example, Phase D interim workflow, hard limits, allowed tools, and a failure-modes table mirroring `task-generator/AGENT.md`; `docs/stellar-engine/plan.md` G6 marked CLOSED (MVP) and the Phase F summary table flipped A/B/E/F to ✅ done.
 
-**F2. Update `setup.sh`.**
-- Add `pymupdf` to the pip install line. (`anthropic` deferred with Phase D.)
-- New section: print `cp .env.example .env` hint + remind operator that Phase D outline is manual today.
+**F1. Add `drafts/` to `.gitignore`.** ✅ `drafts/` excluded; `.env*` lines were already present from earlier work.
 
-**F3. `agents/generator/AGENT.md`.**
-- Document invocation patterns.
-- Hard limit: NEVER call Plane or grava.
-- Hard limit: NEVER auto-promote into `systems/`.
-- Hard limit: NEVER bypass `--llm` gate (default offline mode produces extract.json only).
-- Failure modes table mirroring `task-generator/AGENT.md`.
+**F2. Update `setup.sh`.** ✅
+- Python deps now install `markdown markdownify requests pyyaml` (notes call out that `anthropic` and `pymupdf` stay out until their phases land).
+- New "Sandbox .env" section prompts `cp .env.example .env`, `set -a; source .env; set +a`, and reminds the operator that `ANTHROPIC_API_KEY` can stay as a placeholder under the Phase D interim workflow.
+- Quick-reference footer adds `python3 cli/se generate <source.md> --project <name>` and `python3 cli/se download <project-uuid>`.
 
-**F4. Update `docs/stellar-engine/plan.md`.**
-- Phase F (Generator) → reference `docs/generator/plan.md` as owner.
-- G6 status updated (in progress → done as phases land).
+**F3. `agents/generator/AGENT.md`.** ✅ Replaced the Phase A stub with the full agent prompt: invocation patterns (all flags), three-step pipeline diagram, output format example, Phase D interim workflow, hard limits (NEVER Plane / grava / auto-promote / bypass `--llm` gate / commit `drafts/` / auto-resolve diffs), allowed tools, failure-modes table for every documented exit code, cross-links to plan + downstream parser.
+
+**F4. Update `docs/stellar-engine/plan.md`.** ✅ Phase F summary table now shows A/B/E/F as `✅ done`; G6 row marked CLOSED (MVP) with the manual-outline caveat preserved.
 
 ### Phase G — Doctor integration (optional, can defer)
 
@@ -302,10 +298,10 @@ class Section:
 | E3 | `agents/generator/diff.py` | Implement | ✅ |
 | E3 | `cli/se` (add `generate` subcommand) | Edit | ✅ |
 | E4 | `agents/generator/tests/test_render.py`, `test_cli_render.py`, `test_cli_init_run.py`, `test_cli_run.py`, `test_diff.py`, fixtures | Create | ✅ |
-| F1 | `.gitignore` | Add `drafts/` | ⏳ next |
-| F2 | `setup.sh` | Add deps + ANTHROPIC_API_KEY hint | ⏳ next |
-| F3 | `agents/generator/AGENT.md` | Flesh out | ⏳ next |
-| F4 | `docs/stellar-engine/plan.md` | Cross-link | ⏳ next |
+| F1 | `.gitignore` | Add `drafts/` | ✅ |
+| F2 | `setup.sh` | Add deps + ANTHROPIC_API_KEY hint | ✅ |
+| F3 | `agents/generator/AGENT.md` | Flesh out | ✅ |
+| F4 | `docs/stellar-engine/plan.md` | Cross-link | ✅ |
 
 ---
 

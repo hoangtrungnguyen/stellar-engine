@@ -80,8 +80,8 @@ Today's entry path is `/deploy <id>` (orchestrator-internal routing). A future `
 ### G5. No fleet runtime
 No `se` CLI, no `stellar-orchestrator.md`, no `repos.yaml`, no `policies/default.yaml`. Operator drives everything by hand today.
 
-### G6. No Generator
-Spec markdown is hand-written into Plane pages. No agent generates specs from a markdown source. **Sub-plan owns this:** [`docs/generator/plan.md`](../generator/plan.md). CLI scaffold + markdown extract/render MVP is Phase A–B–E (Phase D LLM outline deferred, manual via Claude Code session). PDF / URLs / transcripts / codebases all deferred.
+### ~~G6. No Generator~~ — **CLOSED (MVP)** for markdown source flow
+Spec markdown is now drafted by the Generator agent (`agents/generator/`, `se generate`). Phases A + B + E + F shipped — `se generate <source.md> --project <name>` produces drafts under `drafts/<project>/runs/<RID>/`, with structured diff vs prior runs. The outline step today is manual via a Claude Code session (Phase D deferred). PDF / URLs / transcripts / codebases all deferred. **Sub-plan with full status:** [`docs/generator/plan.md`](../generator/plan.md).
 
 ### ~~G7. Stale top-level `CLAUDE.md`~~ — **CLOSED** (PR #5 rewrote CLAUDE.md to map two sub-agents, v0 sync, registries, watcher cron, STELLAR_ENGINE_HOME)
 
@@ -202,11 +202,11 @@ Generator sub-plan phases map to this Phase F. Summary:
 
 | Generator phase | What | Status |
 |:---|:---|:---|
-| A | Scaffold: dir tree, IR dataclasses, CLI argparse stubs, smoke tests | planned |
-| B | Markdown frontend: `parser/markdown.py` → IR + `cli/extract.py` | planned |
+| A | Scaffold: dir tree, IR dataclasses, CLI argparse stubs, smoke tests | ✅ done |
+| B | Markdown frontend: `parser/markdown.py` → IR + `cli/extract.py` | ✅ done |
 | D | LLM outline (`llm_client.py` + `cli/outline.py`) | **deferred** — manual via Claude Code session until API key budget exists |
-| E | Render + `se generate` subcommand (wraps `cli/run.py`); structured diff on re-run | planned |
-| F | Operator polish: `.gitignore`, `setup.sh`, `AGENT.md`, `.env.example` | planned |
+| E | Render + `se generate` subcommand (wraps `cli/run.py`); structured diff on re-run | ✅ done |
+| F | Operator polish: `.gitignore`, `setup.sh`, `AGENT.md`, `.env.example` | ✅ done |
 | G | Doctor integration (optional) | planned |
 | — | PDF frontend (was Phase C) | **deferred** |
 
