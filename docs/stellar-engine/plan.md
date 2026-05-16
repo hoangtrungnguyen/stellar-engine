@@ -81,7 +81,7 @@ Today's entry path is `/deploy <id>` (orchestrator-internal routing). A future `
 No `se` CLI, no `stellar-orchestrator.md`, no `repos.yaml`, no `policies/default.yaml`. Operator drives everything by hand today.
 
 ### G6. No Generator
-Spec markdown is hand-written into Plane pages. No agent generates specs from a knowledge source.
+Spec markdown is hand-written into Plane pages. No agent generates specs from a knowledge source. **Sub-plan owns this:** [`docs/generator/{strategy,plan}.md`](../generator/plan.md). CLI scaffold + minimal extract/render MVP is Phase A–E; URL/transcript/codebase deferred.
 
 ### ~~G7. Stale top-level `CLAUDE.md`~~ — **CLOSED** (PR #5 rewrote CLAUDE.md to map two sub-agents, v0 sync, registries, watcher cron, STELLAR_ENGINE_HOME)
 
