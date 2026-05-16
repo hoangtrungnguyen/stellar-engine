@@ -61,7 +61,7 @@ Phases are sized so that Phase N can be exercised on real workloads for a week b
 | Self-host Plane | [`docs/self-host/self-host-plane-plan.md`](../self-host/self-host-plane-plan.md) |
 | `se` CLI | this plan §4 Phase B |
 | `stellar-orchestrator` agent | this plan §4 Phase D |
-| Generator agent | this plan §4 Phase F |
+| Generator agent | this plan §4 Phase F → [`docs/generator/plan.md`](../generator/plan.md) |
 
 ---
 
@@ -81,7 +81,7 @@ Today's entry path is `/deploy <id>` (orchestrator-internal routing). A future `
 No `se` CLI, no `stellar-orchestrator.md`, no `repos.yaml`, no `policies/default.yaml`. Operator drives everything by hand today.
 
 ### G6. No Generator
-Spec markdown is hand-written into Plane pages. No agent generates specs from a knowledge source. **Sub-plan owns this:** [`docs/generator/{strategy,plan}.md`](../generator/plan.md). CLI scaffold + minimal extract/render MVP is Phase A–E; URL/transcript/codebase deferred.
+Spec markdown is hand-written into Plane pages. No agent generates specs from a markdown source. **Sub-plan owns this:** [`docs/generator/plan.md`](../generator/plan.md). CLI scaffold + markdown extract/render MVP is Phase A–B–E (Phase D LLM outline deferred, manual via Claude Code session). PDF / URLs / transcripts / codebases all deferred.
 
 ### ~~G7. Stale top-level `CLAUDE.md`~~ — **CLOSED** (PR #5 rewrote CLAUDE.md to map two sub-agents, v0 sync, registries, watcher cron, STELLAR_ENGINE_HOME)
 
@@ -196,20 +196,23 @@ Spec markdown is hand-written into Plane pages. No agent generates specs from a 
 
 ### Phase F — Generator agent (close G6)
 
-**F1. Choose initial input scope.**
-- Decision needed (strategy §10 OQ3). Recommend: start with codebase + one URL/transcript. Avoid open-ended scope creep.
+> **Sub-plan owns all detail:** [`docs/generator/plan.md`](../generator/plan.md).
 
-**F2. Author `agents/generator/AGENT.md`.**
-- Inputs: knowledge source path, output directory.
-- Outputs: markdown specs ready for `task-generator` consumption (epic / story / task hierarchy).
-- Writes to `drafts/` (not directly to Plane). Operator promotes to `specs/` after review.
+Generator sub-plan phases map to this Phase F. Summary:
 
-**F3. CLI scripts.**
-- `agents/generator/cli/extract.py` — read source, produce structured outline.
-- `agents/generator/cli/render.py` — outline → markdown spec files.
+| Generator phase | What | Status |
+|:---|:---|:---|
+| A | Scaffold: dir tree, IR dataclasses, CLI argparse stubs, smoke tests | planned |
+| B | Markdown frontend: `parser/markdown.py` → IR + `cli/extract.py` | planned |
+| D | LLM outline (`llm_client.py` + `cli/outline.py`) | **deferred** — manual via Claude Code session until API key budget exists |
+| E | Render + `se generate` subcommand (wraps `cli/run.py`); structured diff on re-run | planned |
+| F | Operator polish: `.gitignore`, `setup.sh`, `AGENT.md`, `.env.example` | planned |
+| G | Doctor integration (optional) | planned |
+| — | PDF frontend (was Phase C) | **deferred** |
 
-**F4. Wire to `task-generator`.**
-- After F2 lands a draft, the operator runs `/generate <draft_path>` → uploads via `upload_project_pages.py` → kicks off `task-generator` Phase A.
+Input scope: one markdown file. PDF / URLs / transcripts / codebases all deferred.
+
+Wire to `task-generator`: operator promotes a draft from `drafts/<sys>/` into `systems/<Name>/business/`, uploads via `upload_project_pages.py`, then runs `/generate <page_id>`.
 
 ### Phase G — Hardening (closes G3 partial, G11, remaining)
 
@@ -251,7 +254,7 @@ Spec markdown is hand-written into Plane pages. No agent generates specs from a 
 | E1–E3 | `cli/se` (status/teams/logs/pause/resume/nudge subcmds) | Edit |
 | E4 | `repo-map.yaml`, `repos.yaml` | Annotate |
 | E5 | `policies/default.yaml` | Populate |
-| F1–F4 | `agents/generator/{AGENT.md,cli/*.py}` | Create |
+| F (A–G) | see [`docs/generator/plan.md`](../generator/plan.md) §5 for full file list | per generator sub-plan |
 | G1 | per ship-bug plan | — |
 | ~~G2~~ | `agents/task-generator/cli/grava_plane_sync.py`, grava agents | ~~Create~~ — done (PR #1 + grava PR #66) |
 | G2′ | `agents/task-generator/cli/grava_plane_observer.py`, watermark + jsonl queue | Create (v0.1) |
@@ -289,8 +292,9 @@ Spec markdown is hand-written into Plane pages. No agent generates specs from a 
 - `cli/se pause grava` halts new dispatches; existing in-flight continues.
 
 **After Phase F:**
-- A knowledge source path produces draft markdown specs.
-- Operator promotes → `upload_project_pages.py` writes to Plane → `/generate` triggers `task-generator` Phase A.
+- `se generate <source.md> --project <name> --llm` produces draft markdown specs under `drafts/<name>/` (Phase D land only).
+- `se generate <source.md> --project <name> --no-llm` produces `extract.json` only — operator hand-builds `outline.json` via Claude Code session, then `se generate ... --step render` emits drafts.
+- Operator promotes draft → `upload_project_pages.py` writes to Plane → `/generate` triggers `task-generator` Phase A.
 
 **After Phase G:**
 - Kill `cli/se` mid-run; restart; observe correct re-entry.

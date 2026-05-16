@@ -1,0 +1,42 @@
+{
+  "epics": [
+    {
+      "title": "Court Booking",
+      "summary": "Pick + reserve a court.",
+      "source_anchors": ["L5"],
+      "design_links": [
+        {"label": "Figma — Booking flow", "url": "https://figma.com/x"},
+        {"label": null, "url": "design/booking-mockup.png"}
+      ],
+      "stories": [
+        {
+          "title": "US-01 — Pick a court",
+          "depends_on": ["auth"],
+          "source_anchors": ["L11"],
+          "acceptance_criteria": [
+            "Map shows pins within 5 km",
+            "Pin tap opens detail sheet"
+          ],
+          "tasks": [
+            {"title": "Render map", "ac": ["use Goong tiles"]}
+          ]
+        },
+        {
+          "title": "US-02 — Reserve a court",
+          "depends_on": [],
+          "source_anchors": ["L23"],
+          "acceptance_criteria": [],
+          "tasks": []
+        }
+      ]
+    },
+    {
+      "title": "Cancellations",
+      "summary": "Refund window + audit log.",
+      "source_anchors": ["L30"],
+      "design_links": [],
+      "stories": []
+    }
+  ],
+  "confidence": 0.78
+}

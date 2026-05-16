@@ -1,8 +1,8 @@
 # Generator Agent — Implementation Plan
 
-**Status:** Draft · **Last updated:** 2026-05-16
+**Status:** Phase A ✅ · Phase B ✅ · Phase E ✅ · Phase F next (D deferred) · **Last updated:** 2026-05-16
 
-Companion to [`strategy.md`](strategy.md). Strategy describes intent and components. This plan covers the **CLI scaffold + minimal extract/render MVP** — enough to take one markdown or PDF and emit one spec draft, end-to-end.
+This plan covers the **CLI scaffold + minimal markdown extract/render MVP** for the Generator agent — enough to take one markdown source file and emit one spec draft, end-to-end. The agent translates a document into reviewable spec markdown files under `drafts/<system>/`; it never writes to Plane or grava directly.
 
 ---
 
@@ -11,16 +11,19 @@ Companion to [`strategy.md`](strategy.md). Strategy describes intent and compone
 `docs/stellar-engine/plan.md` §4 Phase F (Generator) was deferred without detail. This sub-plan turns that into concrete sequencing.
 
 Scope cuts:
-- **Input:** one markdown OR one PDF file. URLs / codebases / transcripts are Phase 8+ in `strategy.md`.
+- **Input:** one markdown file. PDF / URLs / codebases / transcripts all deferred.
 - **Output:** one or more spec markdown files under `drafts/<system-name>/`. No Plane writes, no grava writes.
 - **LLM:** Anthropic SDK direct, single Sonnet call per outline, temperature 0.
 - **Promotion:** operator copies a draft into `systems/<Name>/business/` by hand. Not automated.
 
 What this plan does NOT cover (deferred):
-- Codebase-as-source (`strategy.md` §3.1 not listed; Phase 9).
-- URL / transcript frontends (strategy Phase 8).
+- PDF frontend (was Phase C; revisit when a real PDF source-doc workflow is needed).
+- URL / transcript / codebase frontends.
 - Draft staleness doctor checks.
-- task-generator extension to strip `generator_*` frontmatter (open question 7).
+- task-generator extension to strip `generator_*` frontmatter (operator strips manually for now).
+- Multi-document synthesis (one source doc per run).
+- Bidirectional sync between draft and source (source changes → re-run).
+- Auto-promotion of drafts to `systems/`.
 
 ---
 
@@ -34,8 +37,7 @@ What this plan does NOT cover (deferred):
 | `agents/task-generator/parser.py` | Downstream consumer of Generator output; must parse rendered drafts cleanly |
 | `agents/task-generator/cli/resolve_repo.py` | Pattern for resolving system → directory |
 | `agents/orchestrator/tests/conftest.py` | Test-fixture style to reuse |
-| `setup.sh` | Will need `pymupdf` + `anthropic` added to pip install line |
-| `docs/generator/strategy.md` | Design doc, written alongside this plan |
+| `setup.sh` | Will need `anthropic` added to pip install line when Phase D lands |
 | `docs/stellar-engine/plan.md` §4 Phase F | Notes Generator is unbuilt; will mark this sub-plan as the owner |
 
 ### 2.2 To be built
@@ -44,12 +46,11 @@ What this plan does NOT cover (deferred):
 |:---|:---|
 | `agents/generator/__init__.py` | Package marker |
 | `agents/generator/AGENT.md` | Agent prompt: invocation pattern, hard limits, approval gates |
-| `agents/generator/requirements.txt` | `pymupdf>=1.24`, `anthropic>=0.40` |
-| `agents/generator/llm_client.py` | Thin Anthropic SDK wrapper |
+| `agents/generator/requirements.txt` | `anthropic>=0.40` (deferred until Phase D) |
+| `agents/generator/llm_client.py` | Thin Anthropic SDK wrapper (deferred) |
 | `agents/generator/ir.py` | Intermediate representation dataclasses |
-| `agents/generator/parser/__init__.py` | Markdown / PDF dispatcher |
+| `agents/generator/parser/__init__.py` | Markdown dispatcher (PDF deferred) |
 | `agents/generator/parser/markdown.py` | `*.md` → IR |
-| `agents/generator/parser/pdf.py` | `*.pdf` → IR (PyMuPDF) |
 | `agents/generator/outline.py` | IR → hierarchy via LLM |
 | `agents/generator/render.py` | Hierarchy → markdown draft files |
 | `agents/generator/cli/__init__.py` | Package marker |
@@ -61,8 +62,8 @@ What this plan does NOT cover (deferred):
 | `agents/generator/tests/__init__.py` | Test package marker |
 | `agents/generator/tests/conftest.py` | sys.path + fixtures (mirror orchestrator tests) |
 | `agents/generator/tests/test_*.py` | Unit tests per module |
-| `agents/generator/tests/fixtures/sample.md`, `sample.pdf` | Golden inputs |
-| `agents/generator/tests/fixtures/expected_draft.md` | Golden output for regression |
+| `agents/generator/tests/fixtures/sample.md` | Fixture input for parser + render tests |
+| `agents/generator/tests/fixtures/sample_outline.json` | Fixed outline fixture for render tests (no LLM needed) |
 | `setup.sh` edit | Add new deps to install line |
 | `docs/stellar-engine/plan.md` edit | Reference this sub-plan from Phase F |
 
@@ -76,28 +77,27 @@ What this plan does NOT cover (deferred):
 ### G_Gen_2. No LLM credential plumbing
 `agents/task-generator/` uses Plane creds; nothing in the repo loads `ANTHROPIC_API_KEY`. New `llm_client.py` must handle this.
 
-### G_Gen_3. PDF parsing dep absent
-Repo does not depend on PyMuPDF today. `setup.sh` must be extended; clean-clone testing required.
-
 ### G_Gen_4. No `drafts/` convention
 The directory does not exist yet; `.gitignore` does not exclude it. Drafts should be operator-local, not committed by default.
 
-### G_Gen_5. No golden-output regression coverage
-Without a canned input + expected output, the LLM step has no determinism guard. Same prompt + temperature 0 should produce byte-identical render output, but only if golden files exist.
+### G_Gen_5. No structured diff on re-run
+Source docs change over time. Byte-identical comparison against a static golden file breaks on every legitimate edit. The gap is the absence of snapshot storage + diff surfacing: when the same source is re-run, the operator needs to see what changed (sections added/removed/renamed) before deciding whether to promote the new draft.
 
 ---
 
 ## 4. Plan
 
-### Phase A — Scaffold (no LLM, no PDF yet)
+### Phase A — Scaffold (no LLM, no PDF yet) — ✅ DONE (2026-05-16)
 
-**A1. Create the directory tree.**
+> Landed: `agents/generator/` directory tree, IR dataclasses, llm_client stub, markdown-parser stub, 5 CLI argparse skeletons, 20 scaffold tests (8 IR round-trip + 12 CLI smoke). All green: `pytest agents/generator/tests/` → 20 passed.
+
+**A1. Create the directory tree.** ✅
 - `agents/generator/{__init__.py, AGENT.md, ir.py, llm_client.py, requirements.txt}`
-- `agents/generator/parser/{__init__.py, markdown.py, pdf.py}` (markdown only; pdf stubbed)
+- `agents/generator/parser/{__init__.py, markdown.py}` (PDF deferred)
 - `agents/generator/cli/{__init__.py, init_run.py, extract.py, outline.py, render.py, run.py}`
 - `agents/generator/tests/{__init__.py, conftest.py}`
 
-**A2. Define IR dataclasses (`ir.py`).**
+**A2. Define IR dataclasses (`ir.py`).** ✅ Source IR (`Heading`/`Block`/`Section`) + Outline IR (`Epic`/`Story`/`Task`/`DesignLink`/`Outline`) with `section_from_dict` / `outline_from_dict` round-trip helpers.
 ```python
 @dataclass
 class Heading:
@@ -118,115 +118,146 @@ class Section:
     children: list["Section"]
 ```
 
-**A3. CLI argparse skeletons.**
-Each CLI script: argparse, JSON-line output for chained invocation, exit codes documented in module docstring. No real work — just print "phase A scaffold" and exit 0. Verifies the chain runs end-to-end before logic lands.
+**A3. CLI argparse skeletons.** ✅ All 5 scripts (`init_run`, `extract`, `outline`, `render`, `run`) expose `build_parser()` + `main(argv)`, document exit codes, and return 0 after printing `"phase A scaffold"`.
 
-**A4. Tests for A1–A3.**
-- `tests/test_ir.py` — round-trip IR ↔ JSON.
-- `tests/test_cli_smoke.py` — each CLI script accepts `--help`, exits 0.
+**A4. Tests for A1–A3.** ✅
+- `tests/test_ir.py` — 8 round-trip tests including parametrised `confidence`.
+- `tests/test_cli_smoke.py` — 12 tests: `--help` exit 0, happy-path scaffold output, mutually-exclusive `--llm`/`--no-llm`/`--dry-run`, `--step` choices.
 
-**Verify:** `pytest agents/generator/tests/` green; `python3 agents/generator/cli/run.py --help` shows usage.
+**Verify:** ✅ `pytest agents/generator/tests/` → **20 passed in 0.03s**; each `python3 agents/generator/cli/*.py --help` prints usage and exits 0.
 
-### Phase B — Markdown frontend (no LLM yet)
+### Phase B — Markdown frontend (no LLM yet) — ✅ DONE (2026-05-16)
 
-**B1. `parser/markdown.py` → IR.**
-- Walk markdown via the existing `markdown` lib (already a dep).
-- Build `Section` tree from H1/H2/H3/H4 nesting.
-- Capture paragraphs, lists, code blocks, tables as `Block`.
-- Anchor = line number.
+> Landed: hand-rolled line walker (no external markdown lib needed — Python-Markdown was HTML-only; markdown-it / mistletoe not installed). Real `extract.py` CLI with full exit-code coverage. 24 new tests (16 parser + 8 CLI). Total generator suite: 43 passed.
 
-**B2. `cli/extract.py` wires markdown parser when source ends in `.md`.**
-- Writes `extract.json` (`asdict(root_section)`).
-- Exit codes: 0 OK / 1 bad source / 2 parse failure.
+**B1. `parser/markdown.py` → IR.** ✅ Line walker (no external dep). Handles ATX H1–H6, fenced code (` ``` ` and `~~~`), bulleted + numbered lists, pipe tables, paragraphs. Root Section is synthetic level-0; H1+ hang off `root.children`. Anchors = 1-indexed line numbers (`"L<n>"`).
 
-**B3. Tests.**
-- `tests/test_markdown_parser.py` — fixture `sample.md` → expected `Section` tree.
-- `tests/test_cli_extract.py` — invokes `extract.main([…])`, asserts JSON shape.
+**B2. `cli/extract.py` runs markdown parser on the source.** ✅ Rejects non-`.md` with exit 1. Exit codes: 0 OK / 1 bad source or work-dir / 2 parse or write failure. Payload: `{source, source_label, root: asdict(Section)}`. `--stdout` flag echoes JSON.
 
-**Verify:** `python3 agents/generator/cli/extract.py docs/grava-plane-status-sync-plan.md --work-dir /tmp/gen-test` produces a sane `extract.json`.
+**B3. Tests.** ✅
+- `tests/test_markdown_parser.py` — 16 tests: heading tree, paragraph/list/code/table capture, anchors, edge cases (empty, orphan, H4 nesting, both fence styles, numbered lists).
+- `tests/test_cli_extract.py` — 8 tests: happy path, `--stdout`, missing source (exit 1), wrong extension (exit 1), unwritable work-dir (exit 1), write failure (exit 2), parse failure (exit 2), `--help` (exit 0).
 
-### Phase C — PDF frontend
+**Verify:** ✅ `python3 agents/generator/cli/extract.py docs/grava-plane-status-sync-plan.md --work-dir /tmp/gen-test` writes a 1-child-root extract with the H1 `Plan — Grava coding team → Plane status sync` and its H2 children (`Goal`, `Inventory…`, `Trigger model…`).
 
-**C1. Add `pymupdf` to `requirements.txt` and `setup.sh`.**
+### Phase D — LLM outline (DEFERRED — develop in later phase)
 
-**C2. `parser/pdf.py` → IR.**
-- `fitz.open(path)` → iterate pages → extract spans → reconstruct heading hierarchy from font size + bold.
-- Anchor = `page=<N>;y=<float>` so render can echo source position back.
+> **Status: deferred.** Direct Anthropic SDK calls require a paid `ANTHROPIC_API_KEY`, which is not in budget today. Claude Code subscription covers the interactive `claude` CLI only, not SDK calls. Phase D is parked until billing is sorted.
+>
+> **Interim workflow (works today, no API key needed):**
+>
+> 1. `se generate <source> --project <name> --no-llm` → produces `extract.json` only.
+> 2. Operator opens Claude Code in a session, pastes `extract.json`, asks Claude to produce an `outline.json` matching the D2 schema below.
+> 3. Operator saves the produced `outline.json` into `drafts/<sys>/runs/<run_id>/outline.json`.
+> 4. `se generate <source> --project <name> --step render` → render reads the manual outline, emits drafts.
+>
+> This keeps Phases A–C + E + F unblocked. Phase D below is preserved as the future automation target.
 
-**C3. Dropped-element tracking.**
-- Record counts of figures, dropped images, undecodable text. Surface in `extract.json` under `"warnings"`.
-
-**C4. Tests.**
-- Golden fixture: `tests/fixtures/sample.pdf` (one-page PDF with three sections).
-- `tests/test_pdf_parser.py` — assert heading count, section text.
-
-**Verify:** drop a real PRD PDF in `/tmp/`, run `extract.py`, inspect `extract.json` for completeness.
-
-### Phase D — LLM outline
-
-**D1. `llm_client.py`.**
+**D1. `llm_client.py`** *(future)*.
 - Read `ANTHROPIC_API_KEY` from env. Error if missing.
 - `outline(ir_root, *, model="claude-sonnet-4.5", max_tokens=4096)` → hierarchy JSON.
 - Single non-streaming call. Temperature 0. System prompt loaded from `agents/generator/prompts/outline.md`.
 
-**D2. Prompt design.**
+**D2. Prompt + schema** *(active — used by the interim manual workflow)*.
 - Input: IR sections (compressed: heading + first 300 chars per block).
-- Output schema (enforced via JSON mode):
+- Output schema:
   ```json
   {
     "epics": [
       {"title": "...", "summary": "...", "source_anchors": ["..."],
+       "design_links": [
+         {"label": "Figma — Booking flow", "url": "https://figma.com/file/XXX/booking"},
+         {"label": null, "url": "design/booking-mockup.png"}
+       ],
        "stories": [
          {"title": "...", "depends_on": [], "source_anchors": ["..."],
+          "acceptance_criteria": ["...", "..."],
           "tasks": [{"title": "...", "ac": ["..."]}]}
        ]}
     ],
     "confidence": 0.78
   }
   ```
+  `design_links` is optional; empty list / omitted = no UI/UX section rendered. Each entry: `{label, url}`. `label` null → render as bare URL or path.
+- Operator paste the IR sections + the schema above into a Claude Code session and asks for matching JSON.
 
-**D3. `cli/outline.py`.**
-- Reads `extract.json`, calls `llm_client.outline()`, writes `outline.json`.
+**D3. `cli/outline.py`** *(future)*.
+- Will read `extract.json`, call `llm_client.outline()`, write `outline.json`.
 - Exit codes: 0 OK / 1 missing API key / 2 LLM call failed / 3 invalid output shape.
 
-**D4. Tests.**
+**D4. Tests** *(future)*.
 - Mock `llm_client.outline()` (do not call real API in tests).
 - `tests/test_outline_cli.py` — happy path, missing creds, bad shape.
 
-**Verify:** with real API key, run outline against the markdown extract from Phase B. Inspect `outline.json` quality.
+### Phase E — Render — ✅ DONE (2026-05-16)
 
-### Phase E — Render
+> Landed: top-level `render.py` (one .md per epic, full frontmatter, AC + UI/UX blocks); `cli/render.py` with manifest.json + envelope-payload support; `cli/init_run.py` for run-dir provisioning; `agents/generator/diff.py` (added/removed/renamed with Levenshtein-style rename detection at epic/story/task levels); `cli/run.py` chaining init→extract→outline→render with `--dry-run`/`--no-llm`/`--llm`/`--step` + diff persistence as `diff.json`; `cli/se generate` subcommand wired. 50 new tests (17 render + 12 diff + 5 init_run + 7 render-CLI + 12 run-CLI minus 3 already-counted). Total generator suite: **93 passed in 0.07s**.
+>
+> End-to-end verified: `se generate fixtures/sample.md --project demo --run-id RID-1 --system-name "Demo System"` with pre-seeded `outline.json` emits two drafts under `drafts/demo/runs/RID-1/drafts/`. Manual integration check: `task-generator/parser.py` parses the rendered Court Booking draft into 1 epic + 2 stories with no warnings (note: task-generator parser does not yet implement the `**Acceptance Criteria:**` marker rule — AC bullets currently become TaskNodes; format spec is correct, downstream wiring is a follow-up).
 
-**E1. `render.py`.**
+**E1. `render.py`.** ✅
 - Given `outline.json` + run metadata: emit one `*.md` per epic.
 - Filename: `YYYY-MM-DD-<slug>.md` from `epic.title`.
 - Frontmatter: `generator_source`, `generator_run_id`, `generator_confidence`, `generator_model`, `generator_model_version`.
-- Body: H1 (system name), H2 per epic, H3 per story (with `> Depends on:` blockquote when set), H4 per task with AC bullets.
+- Body structure:
+  - H1 = system name.
+  - H2 per epic.
+  - Under each H2, before stories: a **`**UI/UX Design:**`** line listing one or more links (Figma, design-doc URL, image path). Omitted when `epic.design_links` is empty.
+  - H3 per story (with `> Depends on:` blockquote when set).
+  - Under each H3, after the story description: an **`**Acceptance Criteria:**`** marker line followed by a bullet list. Each bullet is one criterion. The downstream task-generator parser ([docs/task-generator/parser.md](../task-generator/parser.md)) treats bullets after this marker as `story.acceptance_criteria` — not tasks.
+  - H4 per task with AC bullets *(optional, used only when stories sub-divide into work items)*.
+- Example epic block:
+  ```markdown
+  ## Epic 1: Court Booking
 
-**E2. `cli/render.py`.**
-- Reads `outline.json`, writes `*.md` files into `drafts/<system>/`.
-- Writes `manifest.json` listing emitted paths + confidence.
+  **UI/UX Design:**
+  - [Figma — Booking flow](https://figma.com/file/XXX/booking)
+  - `design/booking-mockup.png`
 
-**E3. `cli/run.py` (one-shot).**
-- Chains extract → outline → render.
-- `--dry-run`: stop after extract.
-- `--no-llm`: stop after extract; render skipped.
-- `--llm`: required to actually call Anthropic.
+  ### US-01 — Pick a court
+  **As a** customer,
+  **I want to** browse available courts on a map,
+  **so that** I can pick one near me.
 
-**E4. Tests.**
-- Golden fixture: `outline.json` + expected `*.md`.
-- `tests/test_render.py` — assert byte-identical output.
-- `tests/test_cli_run.py` — full chain with mocked LLM.
+  **Acceptance Criteria:**
+  - Map shows courts within a 5 km radius of current location
+  - Pin colour reflects availability (green = open, red = booked)
+  - Tapping a pin opens the court detail sheet
+  ```
 
-**Verify:** end-to-end on a real PDF. Operator-readable drafts emitted. `task-generator/parser.py` parses one promoted draft cleanly (manual integration test).
+**E2. `cli/render.py`.** ✅ Reads `<work-dir>/outline.json` (or envelope `{run_id, source, outline}`), writes `<work-dir>/drafts/*.md` plus `<work-dir>/manifest.json`. Exit codes: 0 / 1 (missing or invalid outline) / 2 (write error).
+
+**E3. `se generate` subcommand + `cli/run.py` (one-shot).** ✅
+- `cli/run.py` is the internal implementation; `se generate` is the operator-facing entry point added to `cli/se`.
+- Operator interface:
+  ```
+  se generate <source> --project <name> --llm        # full chain
+  se generate <source> --project <name> --dry-run    # extract only, no LLM
+  se generate <source> --project <name> --no-llm     # extract only, render skipped
+  se generate <source> --project <name> --step extract|outline|render  # single step
+  ```
+- Chains extract → outline → render internally.
+- `--llm`: required to call Anthropic; default offline mode produces `extract.json` only.
+- On each run, saves `extract.json` + `outline.json` + rendered `*.md` into `drafts/<sys>/runs/<run_id>/`.
+- If a previous run exists for the same source file: compute structured diff (epics/stories/tasks added, removed, renamed) and print it before writing new drafts. Operator sees delta; no hard failure.
+- Diff stored as `drafts/<sys>/runs/<run_id>/diff.json` for audit.
+
+**E4. Tests.** ✅
+- `tests/test_render.py` — 17 tests on the render module (frontmatter keys, H1/H2/H3/H4 structure, AC block, UI/UX block omission, depends-on blockquote, slugify, filename format).
+- `tests/test_cli_render.py` — 7 tests on the render CLI (happy path, envelope payload, missing/malformed/invalid outline, write failure, --help).
+- `tests/test_cli_init_run.py` — 5 tests (creates dir, run.json contents, default UTC run-id, mkdir failure, --help).
+- `tests/test_diff.py` — 12 tests covering empty diff, epic add/remove/rename, story drill-down (including under renamed epics), task add/remove, render_diff_text.
+- `tests/test_cli_run.py` — 12 tests (missing source, --dry-run/--no-llm/--step extract stop after extract; --step outline no-op; --llm refused with helpful Phase D pointer; full chain with hand-placed outline.json; --step render; diff emitted on second run + persisted as diff.json; no diff when no previous run).
+
+**Verify:** ✅ `pytest agents/generator/tests/` → **93 passed**. End-to-end: `python3 cli/se generate agents/generator/tests/fixtures/sample.md --project demo --drafts-root /tmp/se-gen-e2e/drafts --run-id RID-1 --system-name "Demo System"` (with `outline.json` pre-seeded) emits two valid drafts. task-generator parser accepts the result with zero warnings.
 
 ### Phase F — Operator polish
 
 **F1. Add `drafts/` to `.gitignore`.**
 
 **F2. Update `setup.sh`.**
-- Add `pymupdf`, `anthropic` to the pip install line.
-- New section: print `ANTHROPIC_API_KEY` setup hint.
+- Add `pymupdf` to the pip install line. (`anthropic` deferred with Phase D.)
+- New section: print `cp .env.example .env` hint + remind operator that Phase D outline is manual today.
 
 **F3. `agents/generator/AGENT.md`.**
 - Document invocation patterns.
@@ -250,51 +281,99 @@ Each CLI script: argparse, JSON-line output for chained invocation, exit codes d
 
 ## 5. Critical files to create or modify
 
-| Phase | Path | Action |
-|:---|:---|:---|
-| A1 | `agents/generator/__init__.py`, `AGENT.md`, `requirements.txt`, `llm_client.py`, `ir.py` | Create (AGENT.md stub) |
-| A1 | `agents/generator/parser/*.py` | Create |
-| A1 | `agents/generator/cli/*.py` | Create (5 scripts, skeletons) |
-| A1 | `agents/generator/tests/{__init__,conftest}.py` | Create |
-| A4 | `agents/generator/tests/test_ir.py`, `test_cli_smoke.py` | Create |
-| B1 | `agents/generator/parser/markdown.py` | Implement |
-| B2 | `agents/generator/cli/extract.py` | Implement |
-| B3 | `agents/generator/tests/test_markdown_parser.py`, `test_cli_extract.py` | Create |
-| C1 | `agents/generator/requirements.txt`, `setup.sh` | Edit |
-| C2 | `agents/generator/parser/pdf.py` | Implement |
-| C4 | `agents/generator/tests/fixtures/sample.pdf` + `test_pdf_parser.py` | Create |
-| D1 | `agents/generator/llm_client.py` | Implement |
-| D2 | `agents/generator/prompts/outline.md` | Create |
-| D3 | `agents/generator/cli/outline.py` | Implement |
-| D4 | `agents/generator/tests/test_outline_cli.py` | Create |
-| E1 | `agents/generator/render.py` | Implement |
-| E2 | `agents/generator/cli/render.py` | Implement |
-| E3 | `agents/generator/cli/run.py` | Implement |
-| E4 | `agents/generator/tests/test_render.py`, `test_cli_run.py`, fixtures | Create |
-| F1 | `.gitignore` | Add `drafts/` |
-| F2 | `setup.sh` | Add deps + ANTHROPIC_API_KEY hint |
-| F3 | `agents/generator/AGENT.md` | Flesh out |
-| F4 | `docs/stellar-engine/plan.md` | Cross-link |
+| Phase | Path | Action | Status |
+|:---|:---|:---|:---|
+| A1 | `agents/generator/__init__.py`, `AGENT.md`, `requirements.txt`, `llm_client.py`, `ir.py` | Create (AGENT.md stub) | ✅ |
+| A1 | `agents/generator/parser/*.py` | Create | ✅ |
+| A1 | `agents/generator/cli/*.py` | Create (5 scripts, skeletons) | ✅ |
+| A1 | `agents/generator/tests/{__init__,conftest}.py` | Create | ✅ |
+| A4 | `agents/generator/tests/test_ir.py`, `test_cli_smoke.py` | Create | ✅ |
+| B1 | `agents/generator/parser/markdown.py` | Implement | ✅ |
+| B2 | `agents/generator/cli/extract.py` | Implement | ✅ |
+| B3 | `agents/generator/tests/test_markdown_parser.py`, `test_cli_extract.py` | Create | ✅ |
+| D1 | `agents/generator/llm_client.py` | Implement | 🚫 deferred |
+| D2 | `agents/generator/prompts/outline.md` | Create | 🚫 deferred |
+| D3 | `agents/generator/cli/outline.py` | Implement | 🚫 deferred |
+| D4 | `agents/generator/tests/test_outline_cli.py` | Create | 🚫 deferred |
+| E1 | `agents/generator/render.py` | Implement | ✅ |
+| E2 | `agents/generator/cli/render.py` | Implement | ✅ |
+| E3 | `agents/generator/cli/init_run.py` | Implement | ✅ |
+| E3 | `agents/generator/cli/run.py` | Implement | ✅ |
+| E3 | `agents/generator/diff.py` | Implement | ✅ |
+| E3 | `cli/se` (add `generate` subcommand) | Edit | ✅ |
+| E4 | `agents/generator/tests/test_render.py`, `test_cli_render.py`, `test_cli_init_run.py`, `test_cli_run.py`, `test_diff.py`, fixtures | Create | ✅ |
+| F1 | `.gitignore` | Add `drafts/` | ⏳ next |
+| F2 | `setup.sh` | Add deps + ANTHROPIC_API_KEY hint | ⏳ next |
+| F3 | `agents/generator/AGENT.md` | Flesh out | ⏳ next |
+| F4 | `docs/stellar-engine/plan.md` | Cross-link | ⏳ next |
 
 ---
 
 ## 6. Verification
 
-**After Phase A:** `pytest agents/generator/tests/` green (2 tests); CLI `--help` works for all five scripts.
+### Sandbox configuration
 
-**After Phase B:** `extract.py` on this very repo's `docs/grava-plane-status-sync-plan.md` produces a sane `extract.json` with the H2/H3/H4 hierarchy intact.
+End-to-end verification runs against a dedicated sandbox to keep production Plane workspaces clean. Secrets live in a local `.env` file at the stellar-engine repo root (gitignored).
 
-**After Phase C:** `extract.py` on a real-world PRD PDF emits an `extract.json` with most headings preserved; dropped-element count visible.
+| Setting | `.env` key | Notes |
+|:---|:---|:---|
+| Plane workspace | `PLANE_WORKSPACE` | `stellar-sandbox` |
+| Plane host | `PLANE_HOST` | `https://api.plane.so` |
+| Plane project ID | `PLANE_PROJECT_ID` | `STELL` |
+| Plane API key | `PLANE_API_TOKEN` | **never commit** |
+| Anthropic API key | `ANTHROPIC_API_KEY` | **never commit** |
+| Sandbox repo | `SANDBOX_REPO` | `/Users/trungnguyenhoang/IdeaProjects/stellar-sand-box` |
 
-**After Phase D:** with `ANTHROPIC_API_KEY` set, `outline.py` on a Phase B `extract.json` produces a valid `outline.json` matching the schema in D2.
+Setup (one time):
+```bash
+cp .env.example .env       # template at repo root
+$EDITOR .env               # paste real keys
+set -a; source .env; set +a    # load into current shell
+```
+
+The `.env` file is gitignored. `.env.example` is the committed template — safe to share, contains no real keys.
+
+### Per-phase verification
+
+**After Phase A:** `pytest agents/generator/tests/` green; CLI `--help` works for all five scripts.
+
+**After Phase B:**
+```bash
+python3 agents/generator/cli/extract.py docs/grava-plane-status-sync-plan.md --work-dir /tmp/gen-test
+```
+→ `extract.json` with H2/H3/H4 hierarchy intact.
+
+**After Phase D (deferred):** N/A today. Interim check: paste a Phase B `extract.json` into a Claude Code session with the D2 schema; Claude returns an `outline.json` that validates against the schema. Save it to `runs/<run_id>/outline.json` for Phase E to consume.
 
 **After Phase E:**
-- Full chain: `run.py path/to/sample.pdf --llm --output drafts/sample/` produces `*.md` files in `drafts/sample/`.
-- One emitted draft is hand-copied into `systems/<Test>/business/spec.md`, uploaded via `upload_project_pages.py`, and then `agents/task-generator/cli/run.py <project> <page> --dry-run` parses it cleanly with no errors.
+```bash
+# Full chain — emits drafts to sandbox folder
+se generate /path/to/sample.md --project STELL --llm
+
+# Re-run after editing the source — see diff
+se generate /path/to/sample.md --project STELL --llm
+# → prints "Diff vs run <prev>:" with added/removed/renamed epics/stories/tasks
+```
+
+End-to-end integration (manual; assumes `.env` loaded):
+```bash
+# Promote one draft into the sandbox repo
+cp drafts/$PLANE_PROJECT_ID/2026-05-16-<slug>.md \
+   $SANDBOX_REPO/systems/$PLANE_PROJECT_ID/business/spec.md
+
+# Upload to Plane sandbox workspace
+python3 upload_project_pages.py $PLANE_PROJECT_ID \
+   $SANDBOX_REPO/systems/$PLANE_PROJECT_ID/business/
+
+# Trigger task-generator dry-run against the uploaded page
+python3 agents/task-generator/cli/run.py $PLANE_PROJECT_ID <page_id> --dry-run \
+   --target-repo $SANDBOX_REPO
+```
+→ parser accepts the draft, planner builds epic/story/task hierarchy, no errors.
 
 **After Phase F:** `bash setup.sh` on a clean machine installs `pymupdf` and `anthropic`; prints `ANTHROPIC_API_KEY` hint.
 
-**Continuous:** `pytest agents/generator/tests/` after every Phase. Add tests with each implementation, not in a single batch.
+**Continuous:** `pytest agents/generator/tests/` after every Phase. Add tests with each implementation.
 
 ---
 
@@ -305,11 +384,10 @@ A1 ──> A2 ──> A3 ──> A4 ──────────────�
                                               │
 B1 ──> B2 ──> B3 ────────────────────────────┤
                                               │
-C1 ──> C2 ──> C3 ──> C4 (independent of B) ──┤
+[D1 ──> D2 ──> D3 ──> D4]  DEFERRED          │ (manual outline via Claude Code)
                                               │
-D1 ──> D2 ──> D3 ──> D4 ─────────────────────┤
-                                              │
-E1 ──> E2 ──> E3 ──> E4 (depends on B + D) ──┤
+E1 ──> E2 ──> E3 ──> E4 (needs B; uses ──────┤
+                         manual outline.json) │
                                               │
 F1 ─ F2 ─ F3 ─ F4 (after E) ─────────────────┤
                                               │
@@ -318,27 +396,29 @@ G1 (after F, optional) ───────────────────
 
 **Hard rules:**
 
-- **A blocks everything.** No B/C/D/E before scaffold lands.
-- **B and C are independent.** Two operators can split markdown/PDF.
-- **D blocks E.** Outline schema must be stable before render.
-- **E depends on B AND D** (needs both a parser and an outline).
+- **A blocks everything.** No B/D/E before scaffold lands.
+- **D is deferred.** Manual outline via Claude Code session covers it until API key budget exists. The D2 schema is the contract — `outline.json` shape must match whether produced manually or by automation.
+- **E depends on B only** (needs a markdown parser + an `outline.json`; outline can be manual today).
 - **F (operator polish) waits on E.** No point updating `setup.sh` before the chain runs.
 - **G (doctor integration) is optional.** Can land in a follow-up PR after the rest is stable.
 
 **Recommended PR boundaries:**
 
 1. **PR 1: Phase A** — scaffold + smoke tests. Small, easy to review.
-2. **PR 2: Phase B + C** — both parsers in one PR.
-3. **PR 3: Phase D** — LLM outline.
-4. **PR 4: Phase E + F** — render + operator polish.
-5. **PR 5: Phase G** — doctor integration (optional).
+2. **PR 2: Phase B** — markdown parser.
+3. **PR 3: Phase E + F** — render (consumes manual `outline.json`) + operator polish.
+4. **PR 4: Phase G** — doctor integration (optional).
+5. **PR 5 (future): Phase D** — automated LLM outline once API key budget exists.
+6. **Future: PDF frontend** — when a real PDF source workflow is needed; revives the old Phase C.
 
 ---
 
 ## 8. Out of scope for this plan
 
-- URL / transcript / codebase frontends — `strategy.md` Phases 8–9.
-- task-generator extension to strip `generator_*` frontmatter — strategy §10 OQ 7.
-- Cost ceiling per run / token caps — strategy §10 OQ 4.
-- Multi-document synthesis — strategy §6 non-goal.
-- Real-time/streaming Generator — strategy §11 anti-strategy.
+- PDF / URL / transcript / codebase frontends.
+- task-generator extension to strip `generator_*` frontmatter (operator strips manually for now).
+- Cost ceiling per run / token caps.
+- Multi-document synthesis (one source per run).
+- Real-time / streaming generation (one-shot batch only).
+- Auto-promotion of drafts into `systems/`.
+- Direct Plane / grava writes (use `task-generator` + `upload_project_pages.py`).

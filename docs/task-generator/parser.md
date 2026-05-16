@@ -16,7 +16,8 @@ From strategy §3 "Hierarchy mapping":
 - `H1` is treated as the page title; not part of the tree.
 - `H2` → `EpicNode`. The agent currently expects exactly one H2 per spec; warn if more than one.
 - `H3` → `StoryNode` under the most recent H2.
-- Bullet items directly under a story → `TaskNode`.
+- Bullet items directly under a story → `TaskNode` (only bullets *before* an Acceptance Criteria marker).
+- **Acceptance Criteria block** — bold marker `**Acceptance Criteria:**` (case-insensitive, trailing colon optional) on its own line under a story. Every bullet from the marker until the next H2/H3/marker terminates the block is appended to `story.acceptance_criteria` as a plain string (markdown preserved, bullet prefix stripped). Bullets in this block are **not** turned into `TaskNode`s.
 - Headings `H4`+ are folded into the description of the nearest enclosing story or task.
 - Section titles **"Out of scope"** (case-insensitive, any heading level) → skip the entire section and its children.
 - Section titles **"Open questions"** / **"Risks"** at H2 or H3 level under the epic → captured into `epic.open_questions` / `epic.risks` as a list of bullets.
