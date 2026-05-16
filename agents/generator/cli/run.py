@@ -178,12 +178,17 @@ def _load_outline(path: Path) -> dict:
 
 def _find_previous_run(runs_dir: Path, source: Path,
                        *, current_run: str) -> Path | None:
-    """Return the latest sibling run dir whose run.json points at `source`."""
+    """Return the latest sibling run dir whose run.json points at `source`
+    AND which has an outline.json on disk. Runs that stopped early
+    (`--dry-run` / `--no-llm` / `--step extract`) are skipped so the diff
+    lookup keeps walking back to the most recent fully-rendered run."""
     if not runs_dir.exists():
         return None
     candidates: list[Path] = []
     for child in sorted(runs_dir.iterdir(), reverse=True):
         if not child.is_dir() or child.name == current_run:
+            continue
+        if not (child / "outline.json").exists():
             continue
         run_meta = child / "run.json"
         if not run_meta.exists():

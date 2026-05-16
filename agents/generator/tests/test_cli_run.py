@@ -185,3 +185,76 @@ def test_no_diff_when_no_previous_run(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Diff vs run" not in out
     assert not (work / "diff.json").exists()
+
+
+def test_previous_run_without_outline_is_skipped(tmp_path, capsys):
+    """A prior `--dry-run` / `--no-llm` run leaves a run.json but no
+    outline.json. The diff lookup must skip it silently — no WARN — and
+    fall back to "no previous run" rather than tripping over the missing
+    outline.json."""
+    # RID-prev: a dry-run leftover — run.json present, outline.json absent.
+    prev = tmp_path / "demo" / "runs" / "RID-prev"
+    prev.mkdir(parents=True, exist_ok=True)
+    (prev / "run.json").write_text(json.dumps({
+        "run_id": "RID-prev", "project": "demo",
+        "source": str(_SAMPLE_MD), "started_at": "x",
+    }))
+
+    # Current run: outline.json hand-placed; render should proceed without
+    # any diff line and without warning about the prev run.
+    work = tmp_path / "demo" / "runs" / "RID-curr"
+    work.mkdir(parents=True, exist_ok=True)
+    _drop_outline(work)
+
+    rc = run_cli.main([
+        str(_SAMPLE_MD),
+        "--project", "demo",
+        "--drafts-root", str(tmp_path),
+        "--run-id", "RID-curr",
+        "--system-name", "Demo",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "WARN" not in captured.err
+    assert "Diff vs run" not in captured.out
+    assert not (work / "diff.json").exists()
+
+
+def test_diff_walks_back_past_dry_run_to_rendered_run(tmp_path, capsys):
+    """When a dry-run sits between two fully-rendered runs, the diff
+    must compare against the older rendered run, not the dry-run."""
+    # RID-1: fully rendered.
+    work1 = tmp_path / "demo" / "runs" / "RID-1"
+    work1.mkdir(parents=True, exist_ok=True)
+    (work1 / "run.json").write_text(json.dumps({
+        "run_id": "RID-1", "project": "demo",
+        "source": str(_SAMPLE_MD), "started_at": "x",
+    }))
+    _drop_outline(work1)
+
+    # RID-2: dry-run leftover (run.json only).
+    work2 = tmp_path / "demo" / "runs" / "RID-2"
+    work2.mkdir(parents=True, exist_ok=True)
+    (work2 / "run.json").write_text(json.dumps({
+        "run_id": "RID-2", "project": "demo",
+        "source": str(_SAMPLE_MD), "started_at": "x",
+    }))
+
+    # RID-3: current run with a modified outline.
+    modified = json.loads(_SAMPLE_OUTLINE.read_text())
+    modified["epics"] = modified["epics"][:1]   # drop one epic
+    work3 = tmp_path / "demo" / "runs" / "RID-3"
+    work3.mkdir(parents=True, exist_ok=True)
+    (work3 / "outline.json").write_text(json.dumps(modified))
+
+    rc = run_cli.main([
+        str(_SAMPLE_MD),
+        "--project", "demo",
+        "--drafts-root", str(tmp_path),
+        "--run-id", "RID-3",
+        "--system-name", "Demo",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "Diff vs run RID-1" in captured.out   # not RID-2
+    assert "WARN" not in captured.err
