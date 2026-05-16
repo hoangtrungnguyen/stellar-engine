@@ -24,17 +24,29 @@ jobs:
         include:
           - target: darwin-arm64
             runner: macos-14
+            arch: arm64
           - target: darwin-x64
-            runner: macos-13
+            runner: macos-14
+            arch: x64
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: install universal2 Python
+        # python.org ships a universal2 (arm64 + x86_64) binary, which
+        # PyInstaller's --target-arch flag requires for cross-compile from
+        # the arm64 macos-14 runner to x86_64.
+        run: |
+          PYVER="3.12.7"
+          PKG="python-${PYVER}-macos11.pkg"
+          curl -fsSL -o "/tmp/${PKG}" "https://www.python.org/ftp/python/${PYVER}/${PKG}"
+          sudo installer -pkg "/tmp/${PKG}" -target /
+          PY_DIR="/Library/Frameworks/Python.framework/Versions/3.12/bin"
+          echo "${PY_DIR}" >> "$GITHUB_PATH"
+          "${PY_DIR}/python3" --version
+          file "${PY_DIR}/python3"
 
       - name: resolve version
         id: ver
@@ -50,7 +62,9 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: build binary
-        run: bash scripts/build.sh
+        env:
+          SE_TARGET_ARCH: ${{ matrix.arch }}
+        run: bash scripts/build.sh --arch ${{ matrix.arch }}
 
       - name: rename artifacts to match target tag
         # build.sh names by uname; on linux-arm64 runners that gives the right
