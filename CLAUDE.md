@@ -99,6 +99,8 @@ python3 upload_wiki_page.py docs/notes.md
 
 | Doc | Topic |
 |:---|:---|
+| [`README.md`](README.md) | End-user install + quick start |
+| [`docs/install.md`](docs/install.md) | Binary build + release flow (PyInstaller + GH Actions) |
 | [`docs/stellar-engine/strategy.md`](docs/stellar-engine/strategy.md) | System-wide design and roadmap |
 | [`docs/stellar-engine/plan.md`](docs/stellar-engine/plan.md) | Open gaps and phase-by-phase plan |
 | [`docs/ship-bug/strategy.md`](docs/ship-bug/strategy.md) | `/ship-bugfix` (fix-bug team) pipeline design |

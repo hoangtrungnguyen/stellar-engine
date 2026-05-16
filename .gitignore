@@ -24,3 +24,8 @@ drafts/
 .env
 .env.local
 .env.*.local
+
+# PyInstaller build artifacts
+.build-venv/
+build/
+dist/

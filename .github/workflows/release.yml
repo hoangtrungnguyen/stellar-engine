@@ -1,0 +1,117 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g. v0.1.0). Leave empty for a dev build."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-14
+          - target: darwin-x64
+            runner: macos-13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            v="${{ github.ref_name }}"
+          else
+            v="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"
+          fi
+          echo "SE_VERSION=$v" >> "$GITHUB_ENV"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: build binary
+        run: bash scripts/build.sh
+
+      - name: rename artifacts to match target tag
+        # build.sh names by uname; on linux-arm64 runners that gives the right
+        # tag automatically. We still upload by the matrix `target` so the
+        # release-asset names stay deterministic.
+        run: |
+          cd dist
+          # Move whichever se-*.tar.gz was built to the matrix target name.
+          shopt -s nullglob
+          for f in se-*.tar.gz; do
+            mv "$f" "se-${{ matrix.target }}.tar.gz"
+          done
+          for f in se-*.tar.gz.sha256; do
+            mv "$f" "se-${{ matrix.target }}.tar.gz.sha256"
+          done
+          # Recompute checksum against renamed tarball (filename appears in
+          # the .sha256 file).
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "se-${{ matrix.target }}.tar.gz" > "se-${{ matrix.target }}.tar.gz.sha256"
+          else
+            sha256sum "se-${{ matrix.target }}.tar.gz" > "se-${{ matrix.target }}.tar.gz.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: se-${{ matrix.target }}
+          path: |
+            dist/se-${{ matrix.target }}.tar.gz
+            dist/se-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: macos-14
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: flatten artifacts
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) -exec mv {} dist/ \;
+          ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/se-darwin-arm64.tar.gz
+            dist/se-darwin-arm64.tar.gz.sha256
+            dist/se-darwin-x64.tar.gz
+            dist/se-darwin-x64.tar.gz.sha256
+          generate_release_notes: true
+          body: |
+            ## Install (macOS)
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install.sh \
+              | bash -s -- --version ${{ github.ref_name }}
+            ```
+
+            Or grab a tarball below for `darwin-arm64` (Apple Silicon) or `darwin-x64` (Intel) and extract `se` onto your PATH.
