@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""se — Stellar Engine operator CLI (Phase B: read-only commands).
+
+Subcommands:
+  init    Scaffold repos.yaml, policies/default.yaml, logs/
+  repos   List configured repos
+  doctor  Validate global tools and configured repos
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    print("ERROR: pyyaml not installed. Run: pip install pyyaml>=6.0", file=sys.stderr)
+    sys.exit(1)
+
+
+# ── data types ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Check:
+    name: str
+    status: str  # "ok" | "warn" | "error"
+    detail: str = ""
+
+
+# ── repos.yaml I/O ────────────────────────────────────────────────────────────
+
+
+def _load_repos(base: Path) -> dict[str, dict]:
+    path = base / "repos.yaml"
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text()) or {}
+    return data.get("repos") or {}
+
+
+# ── templates ─────────────────────────────────────────────────────────────────
+
+
+_REPOS_YAML = """\
+# repos.yaml — fleet runtime registry (keyed by repo name)
+# Distinct from repo-map.yaml (Plane UUID → repo, used by task-generator).
+# See: docs/stellar-engine/strategy.md §D4
+
+repos: {}
+# Example:
+#   grava:
+#     path: /path/to/grava
+#     max_concurrent: 2
+#     priority_threshold: medium   # low | medium | high
+#     poll_interval: 60            # seconds between ready-backlog probes
+"""
+
+_POLICIES_YAML = """\
+# policies/default.yaml — global fleet policies
+# Per-repo overrides: policies/<repo-name>.yaml
+
+global_max_concurrent: 4
+ship_timeout_minutes: 60
+pause_on_failure_streak: 3
+
+heartbeat:
+  stale_threshold_minutes: 10
+  check_interval_seconds: 30
+"""
+
+
+# ── se init ───────────────────────────────────────────────────────────────────
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    base = Path(args.dir).resolve()
+    created: list[str] = []
+    skipped: list[str] = []
+
+    def _scaffold_file(path: Path, content: str) -> None:
+        if path.exists():
+            skipped.append(str(path))
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            created.append(str(path))
+
+    def _scaffold_dir(path: Path) -> None:
+        if path.exists():
+            skipped.append(str(path) + "/")
+        else:
+            path.mkdir(parents=True)
+            created.append(str(path) + "/")
+
+    _scaffold_file(base / "repos.yaml", _REPOS_YAML)
+    _scaffold_file(base / "policies" / "default.yaml", _POLICIES_YAML)
+    _scaffold_dir(base / "logs")
+
+    for p in created:
+        print(f"  created  {p}")
+    for p in skipped:
+        print(f"  exists   {p} (skipped)")
+
+    if not created:
+        print("Nothing to do — all artifacts already exist.")
+
+
+# ── se repos ──────────────────────────────────────────────────────────────────
+
+
+def cmd_repos(args: argparse.Namespace) -> None:
+    base = Path(args.dir).resolve()
+    repos = _load_repos(base)
+
+    if args.json:
+        print(json.dumps(repos, indent=2))
+        return
+
+    if not repos:
+        print("No repos configured. Edit repos.yaml (run `se init` first).")
+        return
+
+    cols = ["NAME", "PATH", "MAX_CONCURRENT", "PRIORITY_THRESHOLD", "POLL_INTERVAL"]
+    rows = [
+        [
+            name,
+            str(cfg.get("path", "")),
+            str(cfg.get("max_concurrent", "")),
+            str(cfg.get("priority_threshold", "")),
+            str(cfg.get("poll_interval", "")),
+        ]
+        for name, cfg in repos.items()
+    ]
+
+    widths = [
+        max(len(col), max((len(row[i]) for row in rows), default=0))
+        for i, col in enumerate(cols)
+    ]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*cols))
+    print("  ".join("-" * w for w in widths))
+    for row in rows:
+        print(fmt.format(*row))
+
+
+# ── se doctor ─────────────────────────────────────────────────────────────────
+
+
+def _check_tool(name: str) -> Check:
+    path = shutil.which(name)
+    if not path:
+        return Check(name, "error", f"'{name}' not found in PATH")
+    try:
+        r = subprocess.run([name, "--version"], capture_output=True, text=True, timeout=5)
+        version_line = r.stdout.splitlines()[0][:80] if r.returncode == 0 and r.stdout else ""
+        detail = path + (f" — {version_line}" if version_line else "")
+        return Check(name, "ok", detail)
+    except Exception as exc:
+        return Check(name, "ok", f"{path} (version check error: {exc})")
+
+
+def _check_repo(name: str, cfg: dict, base: Path) -> list[Check]:
+    checks: list[Check] = []
+    raw_path = cfg.get("path", "")
+    repo = Path(raw_path) if os.path.isabs(str(raw_path)) else base / raw_path
+
+    if not repo.exists():
+        checks.append(Check(f"{name}: path", "error", f"{repo} does not exist"))
+        return checks
+    checks.append(Check(f"{name}: path", "ok", str(repo)))
+
+    if (repo / ".grava").exists():
+        checks.append(Check(f"{name}: .grava", "ok", ""))
+    else:
+        checks.append(Check(f"{name}: .grava", "error", f"{repo}/.grava not found"))
+
+    ship_skill = repo / ".claude" / "skills" / "ship"
+    if ship_skill.exists():
+        checks.append(Check(f"{name}: /ship skill", "ok", ""))
+    else:
+        checks.append(Check(f"{name}: /ship skill", "warn",
+                            f"{ship_skill} not found (needed for epic-task team)"))
+
+    try:
+        r = subprocess.run(
+            ["grava", "doctor"], capture_output=True, text=True,
+            cwd=str(repo), timeout=10,
+        )
+        if r.returncode == 0:
+            checks.append(Check(f"{name}: grava doctor", "ok", ""))
+        else:
+            first_line = (r.stdout or r.stderr or "non-zero exit").splitlines()[0][:120]
+            checks.append(Check(f"{name}: grava doctor", "error", first_line))
+    except FileNotFoundError:
+        checks.append(Check(f"{name}: grava doctor", "error", "grava binary not found"))
+    except subprocess.TimeoutExpired:
+        checks.append(Check(f"{name}: grava doctor", "warn", "timed out after 10s"))
+
+    return checks
+
+
+def _check_cron() -> Check:
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
+        if "pr_merge_watcher" in r.stdout:
+            return Check("cron: pr_merge_watcher", "ok", "installed")
+    except Exception:
+        return Check("cron: pr_merge_watcher", "warn", "cannot read crontab")
+    return Check(
+        "cron: pr_merge_watcher", "warn",
+        "not installed — see CLAUDE.md §PR merge watcher for cron snippet",
+    )
+
+
+def _render(checks: list[Check]) -> int:
+    icons = {"ok": "✓", "warn": "⚠", "error": "✗"}
+    errors = warnings = 0
+    for c in checks:
+        detail = f"  {c.detail}" if c.detail else ""
+        print(f"  {icons.get(c.status, '?')} {c.name}{detail}")
+        if c.status == "error":
+            errors += 1
+        elif c.status == "warn":
+            warnings += 1
+    return 1 if errors else (2 if warnings else 0)
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    base = Path(args.dir).resolve()
+    checks: list[Check] = []
+
+    for tool in ("tmux", "grava", "gh", "claude"):
+        checks.append(_check_tool(tool))
+
+    repos = _load_repos(base)
+    if not repos:
+        checks.append(Check(
+            "repos.yaml", "warn",
+            "no repos configured — run `se init` then add entries to repos.yaml",
+        ))
+    else:
+        for name, cfg in repos.items():
+            checks.extend(_check_repo(name, cfg, base))
+
+    checks.append(_check_cron())
+
+    if args.json:
+        print(json.dumps(
+            [{"name": c.name, "status": c.status, "detail": c.detail} for c in checks],
+            indent=2,
+        ))
+        rc = 1 if any(c.status == "error" for c in checks) else (
+            2 if any(c.status == "warn" for c in checks) else 0
+        )
+        sys.exit(rc)
+
+    rc = _render(checks)
+    sys.exit(rc)
+
+
+# ── entrypoint ────────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="se",
+        description="Stellar Engine operator CLI",
+    )
+    sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
+    sub.required = True
+
+    p_init = sub.add_parser("init", help="Scaffold repos.yaml, policies/default.yaml, logs/")
+    p_init.add_argument("--dir", default=".", metavar="DIR",
+                        help="Directory to scaffold into (default: cwd)")
+
+    p_repos = sub.add_parser("repos", help="List configured repos from repos.yaml")
+    p_repos.add_argument("--json", action="store_true", help="JSON output")
+    p_repos.add_argument("--dir", default=".", metavar="DIR")
+
+    p_doc = sub.add_parser("doctor", help="Validate global tools and configured repos")
+    p_doc.add_argument("--json", action="store_true", help="JSON output")
+    p_doc.add_argument("--dir", default=".", metavar="DIR")
+
+    args = parser.parse_args()
+    {"init": cmd_init, "repos": cmd_repos, "doctor": cmd_doctor}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    main()
