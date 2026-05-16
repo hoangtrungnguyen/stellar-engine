@@ -11,8 +11,16 @@ __pycache__/
 # task-generator runtime artifacts (live in target repos, not here)
 runs/
 
+# generator agent runtime artifacts — operator-local, never committed
+drafts/
+
 # Local Plane sync state
 .plane-pages.json
 
 # Claude local settings
 .claude/settings.local.json
+
+# Local environment / API keys — NEVER commit
+.env
+.env.local
+.env.*.local

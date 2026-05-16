@@ -55,13 +55,21 @@ success "plane $(plane --version 2>/dev/null || echo 'installed')"
 header "Installing Python dependencies"
 
 PIP=$(command -v pip3 || command -v pip || true)
+# Notes:
+#  - `markdown` (>=3.6) is used by task-generator and the generator agent.
+#  - `markdownify` parses Plane HTML pages.
+#  - `anthropic` is intentionally NOT installed: generator Phase D (LLM
+#    outline) is deferred; today the outline step runs manually via a
+#    Claude Code session. Add `anthropic>=0.40` here when Phase D lands.
+#  - `pymupdf` (PDF frontend) is also deferred — markdown is the only
+#    supported source for now.
 if [ -z "$PIP" ]; then
-    warn "pip not found — skipping Python deps (install manually: pip install -r agents/task-generator/requirements.txt markdown)"
+    warn "pip not found — skipping Python deps (install manually: pip install markdown markdownify requests pyyaml)"
 else
-    $PIP install -q markdown requests pyyaml --break-system-packages 2>/dev/null \
-        || $PIP install -q markdown requests pyyaml 2>/dev/null \
-        || warn "Could not install Python deps automatically — run: pip install markdown requests pyyaml"
-    success "markdown, requests, pyyaml installed"
+    $PIP install -q markdown markdownify requests pyyaml --break-system-packages 2>/dev/null \
+        || $PIP install -q markdown markdownify requests pyyaml 2>/dev/null \
+        || warn "Could not install Python deps automatically — run: pip install markdown markdownify requests pyyaml"
+    success "markdown, markdownify, requests, pyyaml installed"
 fi
 
 # ── credentials ───────────────────────────────────────────────────────────────
@@ -135,6 +143,29 @@ else
     echo "  Then: source ~/.zshrc (or ~/.bashrc)"
 fi
 
+# ── sandbox .env ──────────────────────────────────────────────────────────────
+header "Sandbox .env"
+
+SCRIPT_DIR_PRE_CRON="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_EXAMPLE="$SCRIPT_DIR_PRE_CRON/.env.example"
+ENV_FILE="$SCRIPT_DIR_PRE_CRON/.env"
+
+if [ -f "$ENV_FILE" ]; then
+    success ".env present at $ENV_FILE"
+else
+    warn ".env not found — generator + integration tests need this for sandbox runs."
+    echo ""
+    echo "  Create it from the template:"
+    echo ""
+    echo "    cp $ENV_EXAMPLE $ENV_FILE"
+    echo "    \$EDITOR $ENV_FILE        # paste real PLANE_API_TOKEN, etc."
+    echo "    set -a; source $ENV_FILE; set +a   # load into current shell"
+    echo ""
+    echo "  Generator note: ANTHROPIC_API_KEY can stay as the placeholder —"
+    echo "  the outline step runs manually via Claude Code today (Phase D"
+    echo "  is deferred). See docs/generator/plan.md §Phase D."
+fi
+
 # ── pr_merge_watcher cron ─────────────────────────────────────────────────────
 header "PR merge watcher cron"
 
@@ -156,6 +187,8 @@ echo "  plane issues list <PROJECT>"
 echo "  plane issue create <PROJECT> \"Issue title\""
 echo "  python3 upload_project_pages.py <project-uuid> <file.md>"
 echo "  python3 agents/orchestrator/cli/doctor.py --target-repo <path>"
+echo "  python3 cli/se generate <source.md> --project <name>           # generator"
+echo "  python3 cli/se download <project-uuid>                         # Plane → systems/"
 echo ""
 echo -e "  Run the doctor against any target repo to verify your environment."
 echo ""

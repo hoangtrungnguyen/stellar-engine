@@ -44,10 +44,18 @@ projects:
   # vars when running the agent against this project, e.g.:
   #
   #   PLANE_WORKSPACE=stellar-engine \
-  #   PLANE_API_TOKEN=plane_api_5b43b37f41834c2595241c136265242d \
+  #   PLANE_API_TOKEN=<your-token>            # never commit a real token
   #     python3 agents/task-generator/cli/run.py \
   #       f0c79297-dc54-4762-9ced-dd5dafa85254 <page_id> --dry-run
   "f0c79297-dc54-4762-9ced-dd5dafa85254":
     repo_name: stellar-engine
     git_url: https://github.com/hoangtrungnguyen/stellar-engine.git
     workspace_prefix: STELENG
+
+  # Stellar-Sandbox — end-to-end test workspace (workspace: stellar-sandbox).
+  # Used to validate the full generator → task-generator → grava → Plane sync
+  # flow against a real Plane workspace + GitHub repo without touching prod.
+  "cec88b42-b47c-4f1c-bfdf-a882c490a784":
+    repo_name: stellar-sand-box
+    git_url: https://github.com/hoangtrungnguyen/stellar-sanbox-testing.git
+    workspace_prefix: STELL

@@ -219,6 +219,76 @@ def _check_cron() -> Check:
     )
 
 
+# ── generator checks (Phase G) ────────────────────────────────────────────────
+
+
+def _check_python_module(module: str, *, required: bool = True,
+                         note: str = "") -> Check:
+    """Probe importability of a Python module. `required=False` downgrades a
+    missing module to warn (deferred-dep info, not a hard error)."""
+    import importlib.util
+    spec = importlib.util.find_spec(module)
+    if spec is not None:
+        return Check(f"python: {module}", "ok", spec.origin or "")
+    status = "error" if required else "warn"
+    detail = f"not installed{(' — ' + note) if note else ''}"
+    return Check(f"python: {module}", status, detail)
+
+
+def _check_env_file(base: Path) -> Check:
+    env_file = base / ".env"
+    if env_file.exists():
+        return Check(".env", "ok", str(env_file))
+    example = base / ".env.example"
+    hint = f"copy {example} → .env and edit" if example.exists() else "create from .env.example"
+    return Check(".env", "warn", f"not present — {hint}")
+
+
+def _check_generator(base: Path) -> list[Check]:
+    """Generator agent: package importable, deps, drafts/ informational."""
+    checks: list[Check] = []
+
+    pkg_dir = base / "agents" / "generator"
+    if not pkg_dir.exists():
+        checks.append(Check("generator: package", "error",
+                            f"{pkg_dir} not found"))
+        return checks
+    checks.append(Check("generator: package", "ok", str(pkg_dir)))
+
+    # Phase A–E ships pure stdlib; markdownify is used by sibling tools.
+    checks.append(_check_python_module("markdown", required=True))
+    checks.append(_check_python_module("markdownify", required=True))
+
+    # Deferred phases — info only.
+    checks.append(_check_python_module(
+        "anthropic", required=False,
+        note="Phase D (LLM outline) deferred; manual via Claude Code today",
+    ))
+    checks.append(_check_python_module(
+        "pymupdf", required=False,
+        note="PDF frontend deferred; markdown source only",
+    ))
+
+    drafts = base / "drafts"
+    if drafts.exists():
+        try:
+            n_runs = sum(
+                1 for proj in drafts.iterdir() if (proj / "runs").is_dir()
+                for _ in (proj / "runs").iterdir()
+            )
+            checks.append(Check("generator: drafts/",
+                                "ok", f"{drafts} ({n_runs} run(s) on disk)"))
+        except OSError as exc:
+            checks.append(Check("generator: drafts/", "warn", str(exc)))
+    else:
+        checks.append(Check(
+            "generator: drafts/", "warn",
+            f"{drafts} not present — created on first `se generate` run",
+        ))
+
+    return checks
+
+
 def _render(checks: list[Check]) -> int:
     icons = {"ok": "✓", "warn": "⚠", "error": "✗"}
     errors = warnings = 0
@@ -250,6 +320,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             checks.extend(_check_repo(name, cfg, base))
 
     checks.append(_check_cron())
+    checks.append(_check_env_file(base))
+    checks.extend(_check_generator(base))
 
     if args.json:
         print(json.dumps(
@@ -263,6 +335,52 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     rc = _render(checks)
     sys.exit(rc)
+
+
+# ── se download ───────────────────────────────────────────────────────────────
+
+
+def cmd_download(args: argparse.Namespace) -> None:
+    """Thin wrapper around download_project_pages.py at the repo root."""
+    script = Path(__file__).resolve().parent.parent / "download_project_pages.py"
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [sys.executable, str(script), args.project_id,
+           "--output-root", args.output_root]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    sys.exit(subprocess.call(cmd))
+
+
+# ── se generate ───────────────────────────────────────────────────────────────
+
+
+def cmd_generate(args: argparse.Namespace) -> None:
+    """Thin wrapper around agents/generator/cli/run.py."""
+    script = (Path(__file__).resolve().parent.parent
+              / "agents" / "generator" / "cli" / "run.py")
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [sys.executable, str(script), args.source, "--project", args.project]
+    if args.drafts_root:
+        cmd += ["--drafts-root", args.drafts_root]
+    if args.system_name:
+        cmd += ["--system-name", args.system_name]
+    if args.run_id:
+        cmd += ["--run-id", args.run_id]
+    if args.llm:
+        cmd.append("--llm")
+    if args.no_llm:
+        cmd.append("--no-llm")
+    if args.dry_run:
+        cmd.append("--dry-run")
+    if args.step:
+        cmd += ["--step", args.step]
+    sys.exit(subprocess.call(cmd))
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -288,8 +406,42 @@ def main() -> None:
     p_doc.add_argument("--json", action="store_true", help="JSON output")
     p_doc.add_argument("--dir", default=".", metavar="DIR")
 
+    p_dl = sub.add_parser("download",
+                          help="Download Plane project pages to systems/<workspace>/<project>/")
+    p_dl.add_argument("project_id", help="Plane project UUID or shortcode")
+    p_dl.add_argument("--output-root", default="systems", metavar="DIR",
+                      help="Output root (default: systems/)")
+    p_dl.add_argument("--dry-run", action="store_true", help="List without writing")
+
+    p_gen = sub.add_parser("generate",
+                           help="Run the generator chain (extract → outline → render)")
+    p_gen.add_argument("source", help="Path to source document (markdown today)")
+    p_gen.add_argument("--project", required=True,
+                       help="Project / system name (drafts subdir)")
+    p_gen.add_argument("--drafts-root", default=None, metavar="DIR",
+                       help="Drafts root (default: drafts/)")
+    p_gen.add_argument("--system-name", default=None,
+                       help="System H1 (default: --project value)")
+    p_gen.add_argument("--run-id", default=None,
+                       help="Override run ID (default: UTC timestamp)")
+    gen_mode = p_gen.add_mutually_exclusive_group()
+    gen_mode.add_argument("--llm", action="store_true",
+                          help="Call Anthropic API (Phase D, deferred)")
+    gen_mode.add_argument("--no-llm", action="store_true",
+                          help="Skip outline; produce extract.json only")
+    gen_mode.add_argument("--dry-run", action="store_true",
+                          help="Extract only, do not render")
+    p_gen.add_argument("--step", choices=("extract", "outline", "render"),
+                       default=None, help="Run a single step")
+
     args = parser.parse_args()
-    {"init": cmd_init, "repos": cmd_repos, "doctor": cmd_doctor}[args.cmd](args)
+    {
+        "init": cmd_init,
+        "repos": cmd_repos,
+        "doctor": cmd_doctor,
+        "download": cmd_download,
+        "generate": cmd_generate,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":

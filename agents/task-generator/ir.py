@@ -19,6 +19,7 @@ class StoryNode:
     description_md: str
     type_marker: str | None = None
     tasks: list[TaskNode] = field(default_factory=list)
+    acceptance_criteria: list[str] = field(default_factory=list)
     related_refs: list[str] = field(default_factory=list)
 
 

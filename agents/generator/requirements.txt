@@ -1,0 +1,7 @@
+# Generator agent — Python deps
+#
+# Phase A–B: markdown parser only. Uses `markdown` from task-generator.
+# Phase D (deferred): `anthropic>=0.40` for direct SDK calls.
+# Phase C (future): `pymupdf` for PDF frontend.
+
+markdown>=3.6
