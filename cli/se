@@ -680,11 +680,12 @@ def main() -> None:
     p_sync.add_argument("--log-level", default=None,
                         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
                         help="Log verbosity (default: INFO)")
-    p_sync.add_argument("--direction", default=None,
+    p_sync.add_argument("--direction", default="pull",
                         choices=("push", "pull", "both"),
                         help=(
-                            "Sync direction. push (default): grava → Plane. "
-                            "pull: import Plane work items as new grava issues. "
+                            "Sync direction. pull (default): import Plane "
+                            "work items as new grava issues. "
+                            "push: grava → Plane (status / assignee / comments). "
                             "both: pull then push."
                         ))
 

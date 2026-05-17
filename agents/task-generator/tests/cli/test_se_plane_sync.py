@@ -66,6 +66,20 @@ def test_se_plane_sync_help_lists_direction() -> None:
     assert "both" in r.stdout
 
 
+def test_se_plane_sync_default_direction_is_pull() -> None:
+    """`se plane-sync` (operator UX) defaults to pull."""
+    r = subprocess.run(
+        [sys.executable, str(SE), "plane-sync", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert r.returncode == 0
+    # Help text must call out pull as the default; defensive against future drift.
+    assert "pull (default)" in r.stdout.lower() or "default: pull" in r.stdout.lower() \
+        or "default='pull'" in r.stdout.lower()
+
+
 def test_se_plane_sync_rejects_invalid_direction() -> None:
     r = subprocess.run(
         [

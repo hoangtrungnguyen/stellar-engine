@@ -621,6 +621,19 @@ def test_main_direction_pull_skips_push(tmp_path, monkeypatch):
     assert sync_issue_called["n"] == 0
 
 
+def test_script_default_direction_is_push():
+    """Raw `grava_plane_sync.py` keeps push as default (agent hooks rely on this).
+
+    The `se plane-sync` wrapper overrides this default to pull for operator UX,
+    but the script itself must not change — otherwise post-`grava signal`
+    coder/reviewer/pr-creator hooks would silently start importing from Plane.
+    """
+    from grava_plane_sync import build_arg_parser
+    ap = build_arg_parser()
+    parsed = ap.parse_args(["--project-id", "x", "--grava-repo", "/tmp"])
+    assert parsed.direction == "push"
+
+
 def test_main_direction_push_skips_pull(tmp_path, monkeypatch):
     """Default `--direction push` does NOT call pull_from_plane."""
     state_file = tmp_path / "s.json"

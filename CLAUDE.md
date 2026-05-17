@@ -50,9 +50,11 @@ python3 cli/se doctor --dir .                      # validate tools, repos, gene
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
 python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
     [--system-yaml ... --state-file ... --log-level ... --direction {push,pull,both}]
-                                                   # default push: grava → Plane (status / assignee / comments)
-                                                   # pull: import all Plane work items as new grava issues
+                                                   # default pull: import all Plane work items as new grava issues
+                                                   # push: grava → Plane (status / assignee / comments)
                                                    # both: pull then push
+                                                   # NOTE: raw `python3 grava_plane_sync.py` still defaults to push
+                                                   # (agent hooks rely on this).
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
 python3 cli/se generate <source.md> --project <name>                 # offline: extract.json only
