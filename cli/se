@@ -2,9 +2,14 @@
 """se — Stellar Engine operator CLI (Phase B: read-only commands).
 
 Subcommands:
-  init    Scaffold repos.yaml, policies/default.yaml, logs/
-  repos   List configured repos
-  doctor  Validate global tools and configured repos
+  init         Scaffold repos.yaml, policies/default.yaml, logs/
+  repos        List or modify configured repos
+    repos list  List entries (default action)
+    repos add   Register a new repo (and `grava init` it if needed)
+  doctor       Validate global tools and configured repos
+  download     Pull Plane project pages to systems/<workspace>/<project>/
+  generate     Run the generator chain (extract → outline → render)
+  plane-sync   Sync a Grava issue → Plane (status / assignee / comments)
 """
 from __future__ import annotations
 
@@ -78,11 +83,15 @@ def _load_repos(base: Path) -> dict[str, dict]:
 # ── templates ─────────────────────────────────────────────────────────────────
 
 
-_REPOS_YAML = """\
+_REPOS_YAML_HEADER = """\
 # repos.yaml — fleet runtime registry (keyed by repo name)
 # Distinct from repo-map.yaml (Plane UUID → repo, used by task-generator).
 # See: docs/stellar-engine/strategy.md §D4
 
+"""
+
+
+_REPOS_YAML = _REPOS_YAML_HEADER + """\
 repos: {}
 # Example:
 #   grava:
@@ -91,6 +100,20 @@ repos: {}
 #     priority_threshold: medium   # low | medium | high
 #     poll_interval: 60            # seconds between ready-backlog probes
 """
+
+
+def _save_repos(base: Path, repos: dict[str, dict]) -> None:
+    """Atomic write of repos.yaml; preserves header, drops Example block."""
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "repos.yaml"
+    body = yaml.safe_dump(
+        {"repos": repos or {}},
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(_REPOS_YAML_HEADER + body)
+    tmp.replace(path)
 
 _POLICIES_YAML = """\
 # policies/default.yaml — global fleet policies
@@ -146,10 +169,21 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_repos(args: argparse.Namespace) -> None:
-    base = Path(args.dir).resolve()
+    """Dispatcher for `se repos {list,add}`. Bare `se repos` → list."""
+    sub_action = getattr(args, "repos_cmd", None) or "list"
+    if sub_action == "add":
+        return cmd_repos_add(args)
+    return _cmd_repos_list(args)
+
+
+def _cmd_repos_list(args: argparse.Namespace) -> None:
+    # Defensive defaults: bare `se repos` has no --json/--dir from list subparser
+    json_out = getattr(args, "json", False)
+    dir_arg = getattr(args, "dir", ".")
+    base = Path(dir_arg).resolve()
     repos = _load_repos(base)
 
-    if args.json:
+    if json_out:
         print(json.dumps(repos, indent=2))
         return
 
@@ -178,6 +212,75 @@ def cmd_repos(args: argparse.Namespace) -> None:
     print("  ".join("-" * w for w in widths))
     for row in rows:
         print(fmt.format(*row))
+
+
+def cmd_repos_add(args: argparse.Namespace) -> None:
+    """Register a new repo in repos.yaml, running `grava init` if needed."""
+    base = Path(args.dir).resolve()
+    repos = _load_repos(base)
+
+    existed = args.name in repos
+    if existed and not args.force:
+        print(
+            f"ERROR: repo '{args.name}' already in repos.yaml. "
+            f"Use --force to overwrite.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    repo_path = Path(args.path).expanduser().resolve()
+    if not repo_path.exists():
+        print(
+            f"ERROR: path {repo_path} does not exist. "
+            f"Create the directory (or clone the repo) first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not repo_path.is_dir():
+        print(f"ERROR: {repo_path} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    # grava init (skipped if .grava/ already present, or --no-init given)
+    grava_marker = repo_path / ".grava"
+    if grava_marker.exists():
+        print(f"  exists   {grava_marker}/ (skipping grava init)")
+    elif args.no_init:
+        print("  skipped  grava init (--no-init)")
+    else:
+        if not shutil.which("grava"):
+            print(
+                "ERROR: grava binary not found in PATH. "
+                "Install grava or re-run with --no-init.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"  running  grava init in {repo_path}")
+        r = subprocess.run(
+            ["grava", "init"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if r.returncode != 0:
+            print(
+                f"ERROR: grava init failed (exit {r.returncode}):\n"
+                f"{r.stderr or r.stdout}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"  created  {grava_marker}/")
+
+    repos[args.name] = {
+        "path": str(repo_path),
+        "max_concurrent": args.max_concurrent,
+        "priority_threshold": args.priority_threshold,
+        "poll_interval": args.poll_interval,
+    }
+    _save_repos(base, repos)
+
+    verb = "updated" if existed else "added  "
+    print(f"  {verb}  repos.yaml: {args.name} → {repo_path}")
 
 
 # ── se doctor ─────────────────────────────────────────────────────────────────
@@ -444,6 +547,39 @@ def cmd_generate(args: argparse.Namespace) -> None:
     sys.exit(mod.main(argv))
 
 
+# ── se plane-sync ─────────────────────────────────────────────────────────────
+
+
+def cmd_plane_sync(args: argparse.Namespace) -> None:
+    """Invoke agents/task-generator/cli/grava_plane_sync.main directly."""
+    agents_dir = _repo_root() / "agents"
+    script = agents_dir / "task-generator" / "cli" / "grava_plane_sync.py"
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+
+    # grava_plane_sync.py performs its own sys.path.insert for
+    # agents/task-generator/, so its `from plane_client import …` resolves.
+    mod = _load_module("grava_plane_sync", script)
+
+    argv: list[str] = []
+    if args.issue_id:
+        argv.append(args.issue_id)
+    argv += ["--project-id", args.project_id, "--grava-repo", args.grava_repo]
+    if args.state_file:
+        argv += ["--state-file", args.state_file]
+    if args.system_yaml:
+        argv += ["--system-yaml", args.system_yaml]
+    if args.log_failures:
+        argv += ["--log-failures", args.log_failures]
+    if args.log_level:
+        argv += ["--log-level", args.log_level]
+    if args.direction:
+        argv += ["--direction", args.direction]
+
+    sys.exit(mod.main(argv))
+
+
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
 
@@ -464,9 +600,34 @@ def main() -> None:
     p_init.add_argument("--dir", default=".", metavar="DIR",
                         help="Directory to scaffold into (default: cwd)")
 
-    p_repos = sub.add_parser("repos", help="List configured repos from repos.yaml")
-    p_repos.add_argument("--json", action="store_true", help="JSON output")
-    p_repos.add_argument("--dir", default=".", metavar="DIR")
+    p_repos = sub.add_parser("repos", help="List or modify configured repos")
+    repos_sub = p_repos.add_subparsers(dest="repos_cmd", metavar="ACTION")
+    # Don't require — bare `se repos` defaults to list (backward compat).
+
+    p_repos_list = repos_sub.add_parser("list", help="List configured repos")
+    p_repos_list.add_argument("--json", action="store_true", help="JSON output")
+    p_repos_list.add_argument("--dir", default=".", metavar="DIR")
+
+    p_repos_add = repos_sub.add_parser(
+        "add",
+        help="Register a new repo (runs `grava init` in <path> if .grava/ missing)",
+    )
+    p_repos_add.add_argument("name", help="Logical repo name (registry key)")
+    p_repos_add.add_argument("--path", required=True, metavar="PATH",
+                             help="Path to the repo's working tree (absolute or ~-expandable)")
+    p_repos_add.add_argument("--max-concurrent", type=int, default=2, metavar="N",
+                             help="Concurrent ships allowed (default: 2)")
+    p_repos_add.add_argument("--priority-threshold",
+                             choices=("low", "medium", "high"), default="medium",
+                             help="Minimum priority to pick up (default: medium)")
+    p_repos_add.add_argument("--poll-interval", type=int, default=60, metavar="SECONDS",
+                             help="Backlog probe interval (default: 60s)")
+    p_repos_add.add_argument("--force", action="store_true",
+                             help="Overwrite an existing entry with the same name")
+    p_repos_add.add_argument("--no-init", action="store_true",
+                             help="Skip `grava init` in the target dir")
+    p_repos_add.add_argument("--dir", default=".", metavar="DIR",
+                             help="Stellar-engine config dir (where repos.yaml lives)")
 
     p_doc = sub.add_parser("doctor", help="Validate global tools and configured repos")
     p_doc.add_argument("--json", action="store_true", help="JSON output")
@@ -500,6 +661,34 @@ def main() -> None:
     p_gen.add_argument("--step", choices=("extract", "outline", "render"),
                        default=None, help="Run a single step")
 
+    p_sync = sub.add_parser(
+        "plane-sync",
+        help="Sync a Grava issue's status/assignee/comments to its linked Plane work item",
+    )
+    p_sync.add_argument("issue_id", nargs="?", default=None,
+                        help="Grava issue id (e.g. grava-0305). Omit to scan all plane-linked issues.")
+    p_sync.add_argument("--project-id", required=True, metavar="UUID",
+                        help="Plane project UUID")
+    p_sync.add_argument("--grava-repo", required=True, metavar="PATH",
+                        help="Path to Grava repo root (must contain .grava/dolt/)")
+    p_sync.add_argument("--state-file", default=None, metavar="PATH",
+                        help="State file path (default: ~/.local/share/grava-plane-sync/<project_id>.json)")
+    p_sync.add_argument("--system-yaml", default=None, metavar="PATH",
+                        help="Path to system.yaml containing plane_state_map")
+    p_sync.add_argument("--log-failures", default=None, metavar="PATH",
+                        help="Append-only JSONL log of non-success gates")
+    p_sync.add_argument("--log-level", default=None,
+                        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+                        help="Log verbosity (default: INFO)")
+    p_sync.add_argument("--direction", default="pull",
+                        choices=("push", "pull", "both"),
+                        help=(
+                            "Sync direction. pull (default): import Plane "
+                            "work items as new grava issues. "
+                            "push: grava → Plane (status / assignee / comments). "
+                            "both: pull then push."
+                        ))
+
     args = parser.parse_args()
     {
         "init": cmd_init,
@@ -507,6 +696,7 @@ def main() -> None:
         "doctor": cmd_doctor,
         "download": cmd_download,
         "generate": cmd_generate,
+        "plane-sync": cmd_plane_sync,
     }[args.cmd](args)
 
 
