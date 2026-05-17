@@ -31,7 +31,7 @@ from planner import (  # noqa: E402
 from repo_map import RepoMapError, lookup_project  # noqa: E402
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="task-generator: end-to-end orchestrator (preview + Phase-2 writes)."
     )
@@ -61,7 +61,7 @@ def main() -> int:
         help="Skip Phase 6 — don't post Plane `blocking` relations even if "
              "dep_graph.json exists.",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     # Step 1: resolve repo (clone if missing)
     try:

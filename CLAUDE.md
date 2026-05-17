@@ -62,8 +62,9 @@ python3 cli/se generate <source.md> --project <name> --step render   # render af
 # See docs/generator/usage.md for the full walkthrough including manual outline step.
 
 # Generate work items from a Plane spec page (dry-run first)
-python3 agents/task-generator/cli/run.py <project_id> <page_id> --dry-run
-python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes      # writes
+python3 cli/se taskgen <project_id> <page_id> --dry-run
+python3 cli/se taskgen <project_id> <page_id> --yes        # writes Plane + Grava
+# (equivalent: python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes)
 
 # Route + dispatch a single grava issue
 python3 agents/orchestrator/cli/route.py <issue_id> --target-repo <path>
