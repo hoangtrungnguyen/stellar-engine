@@ -68,6 +68,7 @@ se --help
 se doctor --dir .                          # validate environment
 se generate path/to/spec.md --project DEMO # turn markdown into spec drafts
 se download <plane-project-uuid>           # pull Plane pages → systems/
+se taskgen <project-uuid> <page-uuid> --yes # Plane page → Plane issues + Grava mirror
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture and [`docs/install.md`](docs/install.md) for build/release details.
