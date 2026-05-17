@@ -44,9 +44,13 @@ For the grava-side hooks (so each `grava signal` mirrors to Plane), see [`docs/g
 ```bash
 # se CLI — engine-level commands
 python3 cli/se init                                # scaffold repos.yaml, policies/, logs/
-python3 cli/se repos                               # list configured repos
+python3 cli/se repos                               # list configured repos (bare = list)
+python3 cli/se repos add <name> --path <abs-path>  # register repo + `grava init` if .grava absent
 python3 cli/se doctor --dir .                      # validate tools, repos, generator, .env, drafts/
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
+python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
+    [--system-yaml ... --state-file ... --log-level ...]
+                                                   # one-shot Grava→Plane sync (status / assignee / comments)
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
 python3 cli/se generate <source.md> --project <name>                 # offline: extract.json only
@@ -116,7 +120,7 @@ python3 upload_wiki_page.py docs/notes.md
 
 ## What this repo is NOT
 
-- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`.
+- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`, `plane-sync`.
 - A general task runner — scope is `grava` + `Plane` + `/ship` only.
 - A grava replacement — operates on grava via `--target-repo` flag; never modifies grava's data model except through wisps.
 - An LLM-driven spec writer — the Generator agent's outline step (Phase D) is deferred; today the operator hand-writes `outline.json` via a Claude Code session. The agent never calls the Anthropic API directly until Phase D ships.
