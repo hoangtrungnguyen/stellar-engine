@@ -167,6 +167,20 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 # ── se repos ──────────────────────────────────────────────────────────────────
+#
+# Manages the fleet-runtime registry at <dir>/repos.yaml (keyed by repo NAME).
+# Distinct from repo-map.yaml — see the file-level doc in repos.yaml itself
+# and docs/stellar-engine/strategy.md §D4.
+#
+#   se repos              # bare → list (backward-compat alias for `se repos list`)
+#   se repos list [...]   # tabular or --json output
+#   se repos add NAME --path PATH [--max-concurrent N] [--priority-threshold ...]
+#                         # writes the entry atomically (tmp + rename) and
+#                         # runs `grava init` in PATH unless --no-init.
+#                         # Refuses to overwrite an existing entry without --force.
+#
+# The two-level subparser (repos → list|add) is wired so a bare `se repos`
+# still works (subparsers.required = False; cmd_repos defaults to list).
 
 
 def cmd_repos(args: argparse.Namespace) -> None:
@@ -549,6 +563,27 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 
 # ── se taskgen ────────────────────────────────────────────────────────────────
+#
+# Thin wrapper around agents/task-generator/cli/run.py — the three-phase
+# end-to-end orchestrator:
+#
+#   Phase 1  preview     parse Plane spec page → epic/story/task plan
+#                        (markdown previews under runs/preview/<RID>/).
+#   Phase 2  Plane       create Plane work items + `blocking` relations.
+#   Phase 3  Grava       mirror the hierarchy into the target repo's grava DB.
+#
+# Each destructive phase prompts the operator unless --yes is set; --dry-run
+# stops after Phase 1 with no writes. The target repo is resolved via
+# repo-map.yaml (Plane UUID → repo, auto-cloned if missing) unless overridden
+# by --target-repo.
+#
+#   se taskgen <PROJECT_UUID> <PAGE_UUID> --dry-run   # preview only
+#   se taskgen <PROJECT_UUID> <PAGE_UUID> --yes       # full pipeline
+#
+# We dispatch via importlib (same in-process pattern as cmd_generate /
+# cmd_plane_sync) so the PyInstaller bundle can call into the agents/ data
+# bundle without spawning subprocess(sys.executable, …) — which would
+# re-enter the `se` entrypoint, not run.py.
 
 
 def cmd_taskgen(args: argparse.Namespace) -> None:
