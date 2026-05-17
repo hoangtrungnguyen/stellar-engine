@@ -50,3 +50,32 @@ def test_se_plane_sync_missing_required_fails() -> None:
     assert r.returncode != 0
     combined = r.stderr + r.stdout
     assert "--project-id" in combined or "--grava-repo" in combined
+
+
+def test_se_plane_sync_help_lists_direction() -> None:
+    r = subprocess.run(
+        [sys.executable, str(SE), "plane-sync", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert r.returncode == 0
+    assert "--direction" in r.stdout
+    assert "push" in r.stdout
+    assert "pull" in r.stdout
+    assert "both" in r.stdout
+
+
+def test_se_plane_sync_rejects_invalid_direction() -> None:
+    r = subprocess.run(
+        [
+            sys.executable, str(SE), "plane-sync",
+            "--project-id", "x", "--grava-repo", "/tmp",
+            "--direction", "sideways",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert r.returncode != 0
+    assert "sideways" in r.stderr or "invalid choice" in r.stderr

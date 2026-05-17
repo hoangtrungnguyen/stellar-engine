@@ -49,8 +49,10 @@ python3 cli/se repos add <name> --path <abs-path>  # register repo + `grava init
 python3 cli/se doctor --dir .                      # validate tools, repos, generator, .env, drafts/
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
 python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
-    [--system-yaml ... --state-file ... --log-level ...]
-                                                   # one-shot Grava→Plane sync (status / assignee / comments)
+    [--system-yaml ... --state-file ... --log-level ... --direction {push,pull,both}]
+                                                   # default push: grava → Plane (status / assignee / comments)
+                                                   # pull: import all Plane work items as new grava issues
+                                                   # both: pull then push
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
 python3 cli/se generate <source.md> --project <name>                 # offline: extract.json only

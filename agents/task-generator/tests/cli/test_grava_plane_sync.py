@@ -455,3 +455,198 @@ def test_main_first_seen_initialises_comment_cursor(monkeypatch, tmp_path):
     assert fetched_comments == []
     state = load_state(state_file)
     assert state.last_comment_id_by_issue.get("grava-1") == 42
+
+
+# ─── pull_from_plane ─────────────────────────────────────────────────────────
+
+
+class _StubDB:
+    """Quacks like GravaDB but lets us seed mirrored seq_ids."""
+
+    def __init__(self, mirrored_seqs):
+        self._rows = [{"id": f"g-{s}", "seq_id": s} for s in mirrored_seqs]
+
+    def fetch_all_plane_issues(self):
+        return list(self._rows)
+
+
+def _patch_grava_helpers(monkeypatch):
+    """Replace the three subprocess wrappers; return a call recorder."""
+    calls = {"create": [], "label": [], "close": []}
+    counter = {"n": 0}
+
+    def fake_create(grava_repo, title, description, issue_type="task", priority="medium"):
+        counter["n"] += 1
+        new_id = f"grava-new-{counter['n']}"
+        calls["create"].append({
+            "title": title, "description": description,
+            "type": issue_type, "priority": priority, "id": new_id,
+        })
+        return new_id
+
+    def fake_label(grava_repo, issue_id, label):
+        calls["label"].append({"issue_id": issue_id, "label": label})
+
+    def fake_close(grava_repo, issue_id):
+        calls["close"].append(issue_id)
+
+    monkeypatch.setattr(sync_mod, "_grava_create_issue", fake_create)
+    monkeypatch.setattr(sync_mod, "_grava_add_label", fake_label)
+    monkeypatch.setattr(sync_mod, "_grava_close_force", fake_close)
+    return calls
+
+
+def test_pull_creates_missing_mirrors(tmp_path, monkeypatch):
+    calls = _patch_grava_helpers(monkeypatch)
+    client = FakePlaneClient(
+        states=[
+            {"id": "s-todo",  "name": "Todo",        "group": "unstarted"},
+            {"id": "s-prog",  "name": "In Progress", "group": "started"},
+            {"id": "s-done",  "name": "Done",        "group": "completed"},
+        ],
+        work_items=[
+            {"id": "u-1", "sequence_id": 101, "name": "Backlog task",
+             "description_stripped": "do x", "priority": "high", "state": "s-todo"},
+            {"id": "u-2", "sequence_id": 102, "name": "Doing now",
+             "description_stripped": "", "priority": "urgent", "state": "s-prog"},
+            {"id": "u-3", "sequence_id": 103, "name": "Already done",
+             "description_stripped": "", "priority": "low", "state": "s-done"},
+        ],
+    )
+    db = _StubDB(mirrored_seqs=[])  # nothing mirrored locally yet
+
+    counts = sync_mod.pull_from_plane(client, "proj-1", tmp_path, db)
+    assert counts == {"scanned": 3, "already_linked": 0, "created": 3, "skipped": 0, "failed": 0}
+    assert len(calls["create"]) == 3
+    titles = [c["title"] for c in calls["create"]]
+    assert titles == ["Backlog task", "Doing now", "Already done"]
+    # Priority mapping: high→high, urgent→critical, low→low
+    prios = [c["priority"] for c in calls["create"]]
+    assert prios == ["high", "critical", "low"]
+    # Labels applied with correct seq.
+    labels = [l["label"] for l in calls["label"]]
+    assert labels == ["plane:101", "plane:102", "plane:103"]
+    # Only the completed-group item got closed.
+    assert len(calls["close"]) == 1
+
+
+def test_pull_skips_already_linked(tmp_path, monkeypatch):
+    calls = _patch_grava_helpers(monkeypatch)
+    client = FakePlaneClient(
+        states=[{"id": "s-todo", "name": "Todo", "group": "unstarted"}],
+        work_items=[
+            {"id": "u-1", "sequence_id": 200, "name": "old", "state": "s-todo"},
+            {"id": "u-2", "sequence_id": 201, "name": "new", "state": "s-todo"},
+        ],
+    )
+    db = _StubDB(mirrored_seqs=["200"])
+
+    counts = sync_mod.pull_from_plane(client, "proj-1", tmp_path, db)
+    assert counts == {"scanned": 2, "already_linked": 1, "created": 1, "skipped": 0, "failed": 0}
+    titles = [c["title"] for c in calls["create"]]
+    assert titles == ["new"]
+
+
+def test_pull_handles_missing_sequence_id(tmp_path, monkeypatch):
+    calls = _patch_grava_helpers(monkeypatch)
+    client = FakePlaneClient(
+        states=[{"id": "s", "name": "X", "group": "unstarted"}],
+        work_items=[{"id": "u-1", "name": "no-seq", "state": "s"}],
+    )
+    db = _StubDB(mirrored_seqs=[])
+
+    counts = sync_mod.pull_from_plane(client, "proj-1", tmp_path, db)
+    assert counts == {"scanned": 1, "already_linked": 0, "created": 0, "skipped": 1, "failed": 0}
+    assert calls["create"] == []
+
+
+def test_pull_counts_failed_creates(tmp_path, monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("grava create exploded")
+
+    monkeypatch.setattr(sync_mod, "_grava_create_issue", boom)
+    monkeypatch.setattr(sync_mod, "_grava_add_label", lambda *a, **kw: None)
+    monkeypatch.setattr(sync_mod, "_grava_close_force", lambda *a, **kw: None)
+
+    client = FakePlaneClient(
+        states=[{"id": "s", "name": "X", "group": "unstarted"}],
+        work_items=[
+            {"id": "u-1", "sequence_id": 300, "name": "x", "state": "s"},
+        ],
+    )
+    db = _StubDB(mirrored_seqs=[])
+    counts = sync_mod.pull_from_plane(client, "proj-1", tmp_path, db)
+    assert counts["failed"] == 1
+    assert counts["created"] == 0
+
+
+# ─── main() --direction routing ──────────────────────────────────────────────
+
+
+def test_main_direction_pull_skips_push(tmp_path, monkeypatch):
+    """`--direction pull` runs pull_from_plane and does NOT run push (sync_issue)."""
+    state_file = tmp_path / "s.json"
+    (tmp_path / ".grava" / "dolt").mkdir(parents=True)
+
+    monkeypatch.setattr(sync_mod, "plane_configured", lambda: True)
+    monkeypatch.setattr(sync_mod, "internet_ok", lambda: True)
+    monkeypatch.setattr(
+        sync_mod, "load_credentials",
+        lambda: ("tok", "https://api.plane.so", "ws"),
+    )
+    # Stub PlaneClient → ignore constructor args, return a sentinel.
+    monkeypatch.setattr(sync_mod, "PlaneClient", lambda **kw: object())
+
+    pull_called = {"n": 0}
+    sync_issue_called = {"n": 0}
+
+    def fake_pull(client, project_id, grava_repo, db):
+        pull_called["n"] += 1
+        return {"scanned": 0, "already_linked": 0, "created": 0, "skipped": 0, "failed": 0}
+
+    def fake_sync_issue(*a, **kw):
+        sync_issue_called["n"] += 1
+
+    monkeypatch.setattr(sync_mod, "pull_from_plane", fake_pull)
+    monkeypatch.setattr(sync_mod, "sync_issue", fake_sync_issue)
+
+    rc = main([
+        "--project-id", "proj-1",
+        "--grava-repo", str(tmp_path),
+        "--state-file", str(state_file),
+        "--direction", "pull",
+    ])
+    assert rc == 0
+    assert pull_called["n"] == 1
+    assert sync_issue_called["n"] == 0
+
+
+def test_main_direction_push_skips_pull(tmp_path, monkeypatch):
+    """Default `--direction push` does NOT call pull_from_plane."""
+    state_file = tmp_path / "s.json"
+    (tmp_path / ".grava" / "dolt").mkdir(parents=True)
+
+    monkeypatch.setattr(sync_mod, "plane_configured", lambda: True)
+    monkeypatch.setattr(sync_mod, "internet_ok", lambda: True)
+    monkeypatch.setattr(
+        sync_mod, "load_credentials",
+        lambda: ("tok", "https://api.plane.so", "ws"),
+    )
+    monkeypatch.setattr(sync_mod, "PlaneClient", lambda **kw: object())
+
+    monkeypatch.setattr(GravaDB, "fetch_all_plane_issues", lambda self: [])
+
+    pull_called = {"n": 0}
+    monkeypatch.setattr(
+        sync_mod, "pull_from_plane",
+        lambda *a, **kw: pull_called.__setitem__("n", pull_called["n"] + 1) or {},
+    )
+
+    rc = main([
+        "--project-id", "proj-1",
+        "--grava-repo", str(tmp_path),
+        "--state-file", str(state_file),
+        # no --direction → default push
+    ])
+    assert rc == 0
+    assert pull_called["n"] == 0

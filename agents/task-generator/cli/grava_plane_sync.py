@@ -612,6 +612,180 @@ def sync_issue(
         cursor = state.last_comment_id_by_issue[grava_id]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pull direction — bulk import Plane work items as new grava issues
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_PLANE_PRIORITY_TO_GRAVA = {
+    "urgent": "critical",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "none": "medium",
+}
+
+_PLANE_GROUP_TO_GRAVA_STATUS = {
+    "backlog": "open",
+    "unstarted": "open",
+    "started": "in_progress",
+    "completed": "closed",
+    "cancelled": "closed",
+}
+
+
+def _run_grava_cli(
+    args: list[str], cwd: Path, timeout: int = 30, want_json: bool = False
+) -> tuple[int, str, str]:
+    """Run a grava CLI command in `cwd`. Returns (rc, stdout, stderr)."""
+    cmd = ["grava"] + (["--json"] if want_json else []) + args
+    r = subprocess.run(
+        cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
+    )
+    return r.returncode, r.stdout, r.stderr
+
+
+def _grava_create_issue(
+    grava_repo: Path,
+    title: str,
+    description: str,
+    issue_type: str = "task",
+    priority: str = "medium",
+) -> str:
+    """Create a grava issue, return its id. Raises RuntimeError on failure."""
+    rc, out, err = _run_grava_cli(
+        [
+            "create",
+            "-t", title,
+            "-d", description,
+            "--type", issue_type,
+            "-p", priority,
+        ],
+        cwd=grava_repo,
+        want_json=True,
+    )
+    if rc != 0:
+        raise RuntimeError(f"grava create failed (exit {rc}): {err.strip() or out.strip()}")
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"grava create returned non-JSON: {out[:200]!r}") from exc
+    issue_id = parsed.get("id") if isinstance(parsed, dict) else None
+    if not issue_id:
+        raise RuntimeError(f"grava create response missing id: {parsed!r}")
+    return issue_id
+
+
+def _grava_add_label(grava_repo: Path, issue_id: str, label: str) -> None:
+    rc, out, err = _run_grava_cli(
+        ["label", issue_id, "--add", label], cwd=grava_repo
+    )
+    if rc != 0:
+        raise RuntimeError(
+            f"grava label {issue_id} --add {label} failed (exit {rc}): "
+            f"{err.strip() or out.strip()}"
+        )
+
+
+def _grava_close_force(grava_repo: Path, issue_id: str) -> None:
+    rc, out, err = _run_grava_cli(
+        ["close", "--force", issue_id], cwd=grava_repo, timeout=60
+    )
+    if rc != 0:
+        raise RuntimeError(
+            f"grava close --force {issue_id} failed (exit {rc}): "
+            f"{err.strip() or out.strip()}"
+        )
+
+
+def pull_from_plane(
+    client: PlaneClient,
+    project_id: str,
+    grava_repo: Path,
+    db: GravaDB,
+) -> dict:
+    """Create grava mirrors for all Plane work items not yet linked.
+
+    Skips items that already have a grava issue with their `plane:<seq>` label.
+    Returns a counts dict: {scanned, already_linked, created, skipped, failed}.
+    """
+    pull_log = logging.getLogger("grava_plane_sync.pull")
+
+    # Already-mirrored seq ids (from local grava DB).
+    try:
+        mirrored_rows = db.fetch_all_plane_issues()
+    except RuntimeError as exc:
+        pull_log.error("Cannot read mirrored seq ids: %s", exc)
+        raise
+    mirrored_seqs = {str(r.get("seq_id")) for r in mirrored_rows if r.get("seq_id")}
+    pull_log.info("Pull: %d already-mirrored seq ids", len(mirrored_seqs))
+
+    # All Plane work items in the project.
+    items = client.search_work_items(project_id)
+    pull_log.info("Pull: %d Plane work items returned", len(items))
+
+    # State UUID → group map for status decision.
+    states_by_uuid = {s["id"]: s for s in client.list_states(project_id)}
+
+    counts = {"scanned": 0, "already_linked": 0, "created": 0, "skipped": 0, "failed": 0}
+    for item in items:
+        counts["scanned"] += 1
+        seq = item.get("sequence_id")
+        if seq is None:
+            pull_log.warning("Skip: work item %s has no sequence_id", item.get("id"))
+            counts["skipped"] += 1
+            continue
+        seq_str = str(seq)
+        if seq_str in mirrored_seqs:
+            counts["already_linked"] += 1
+            continue
+
+        title = (item.get("name") or "").strip() or f"Plane item {seq_str}"
+        body = (
+            item.get("description_stripped")
+            or item.get("description")
+            or ""
+        )
+        if isinstance(body, dict):
+            body = ""  # Plane sometimes returns a rich-text object; skip.
+        body = str(body).strip()
+
+        plane_priority = (item.get("priority") or "none").lower()
+        grava_priority = _PLANE_PRIORITY_TO_GRAVA.get(plane_priority, "medium")
+
+        state_uuid = item.get("state")
+        state_obj = states_by_uuid.get(state_uuid) if state_uuid else None
+        plane_group = (state_obj or {}).get("group", "unstarted")
+        grava_target_status = _PLANE_GROUP_TO_GRAVA_STATUS.get(plane_group, "open")
+
+        try:
+            new_id = _grava_create_issue(
+                grava_repo,
+                title=title,
+                description=body,
+                issue_type="task",
+                priority=grava_priority,
+            )
+            _grava_add_label(grava_repo, new_id, f"plane:{seq_str}")
+            if grava_target_status == "closed":
+                _grava_close_force(grava_repo, new_id)
+            pull_log.info(
+                "Created grava %s ← plane:%s [%s, %s]",
+                new_id, seq_str, grava_target_status, grava_priority,
+            )
+            counts["created"] += 1
+        except Exception as exc:  # noqa: BLE001
+            pull_log.error("Failed to mirror plane:%s — %s", seq_str, exc)
+            counts["failed"] += 1
+
+    return counts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=(
@@ -661,6 +835,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    ap.add_argument(
+        "--direction",
+        default="push",
+        choices=["push", "pull", "both"],
+        help=(
+            "Sync direction. push (default): grava → Plane (existing behaviour). "
+            "pull: import Plane work items as new grava issues "
+            "(creates a grava issue with `plane:<seq>` label for every Plane "
+            "item not yet mirrored). both: run pull then push."
+        ),
     )
     return ap
 
@@ -725,6 +910,76 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Plane client + credentials are needed by both directions.
+    try:
+        token, host, workspace = load_credentials()
+    except RuntimeError as exc:
+        log.error("Plane credentials: %s", exc)
+        log_failure(
+            failure_log,
+            project_id=project_id,
+            issue_id=issue_id,
+            gate="plane_creds",
+            exit_code=1,
+            detail=str(exc),
+        )
+        return 1
+    client = PlaneClient(host=host, workspace=workspace, token=token)
+
+    direction = getattr(args, "direction", "push")
+    plane_failure_detail: list[str] = []
+
+    # ── Pull leg ────────────────────────────────────────────────────────────
+    if direction in ("pull", "both"):
+        try:
+            counts = pull_from_plane(client, project_id, args.grava_repo, db)
+            log.info(
+                "Pull complete: scanned=%d already_linked=%d created=%d "
+                "skipped=%d failed=%d",
+                counts["scanned"],
+                counts["already_linked"],
+                counts["created"],
+                counts["skipped"],
+                counts["failed"],
+            )
+            if counts["failed"]:
+                plane_failure_detail.append(
+                    f"pull: {counts['failed']}/{counts['scanned']} create attempts failed"
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.error("pull_from_plane failed: %s", exc)
+            log_failure(
+                failure_log,
+                project_id=project_id,
+                issue_id=issue_id,
+                gate="pull_plane",
+                exit_code=3,
+                detail=str(exc),
+            )
+            if direction == "pull":
+                return 3
+            # `both`: still attempt push leg
+            plane_failure_detail.append(f"pull: {exc}")
+
+        # Pull-only: skip push entirely.
+        if direction == "pull":
+            try:
+                save_state(state, state_path)
+            except OSError as exc:
+                log.warning("save_state failed: %s", exc)
+            if plane_failure_detail:
+                log_failure(
+                    failure_log,
+                    project_id=project_id,
+                    issue_id=issue_id,
+                    gate="plane_api",
+                    exit_code=3,
+                    detail="; ".join(plane_failure_detail),
+                )
+                return 3
+            return 0
+
+    # ── Push leg (existing behaviour) ───────────────────────────────────────
     # Resolve issues to sync.
     try:
         if issue_id:
@@ -758,22 +1013,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    # Plane client + caches.
-    try:
-        token, host, workspace = load_credentials()
-    except RuntimeError as exc:
-        log.error("Plane credentials: %s", exc)
-        log_failure(
-            failure_log,
-            project_id=project_id,
-            issue_id=issue_id,
-            gate="plane_creds",
-            exit_code=1,
-            detail=str(exc),
-        )
-        return 1
-    client = PlaneClient(host=host, workspace=workspace, token=token)
-
     state_map = _load_state_map(args.system_yaml, project_id)
     state_mapper = StateMapper(client, project_id, state, state_map)
     member_mapper = MemberMapper(client, state)
@@ -782,7 +1021,6 @@ def main(argv: list[str] | None = None) -> int:
 
     syncer = PlaneSyncer(client, project_id, state, state_mapper, member_mapper)
 
-    plane_failure_detail: list[str] = []
     for row in rows:
         grava_id = row["id"]
         is_first_seen = grava_id not in state.issues

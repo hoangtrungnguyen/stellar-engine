@@ -574,6 +574,8 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
         argv += ["--log-failures", args.log_failures]
     if args.log_level:
         argv += ["--log-level", args.log_level]
+    if args.direction:
+        argv += ["--direction", args.direction]
 
     sys.exit(mod.main(argv))
 
@@ -678,6 +680,13 @@ def main() -> None:
     p_sync.add_argument("--log-level", default=None,
                         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
                         help="Log verbosity (default: INFO)")
+    p_sync.add_argument("--direction", default=None,
+                        choices=("push", "pull", "both"),
+                        help=(
+                            "Sync direction. push (default): grava → Plane. "
+                            "pull: import Plane work items as new grava issues. "
+                            "both: pull then push."
+                        ))
 
     args = parser.parse_args()
     {
