@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""se — Stellar Engine operator CLI (Phase B: read-only commands).
+"""se — Stellar Engine operator CLI.
 
 Subcommands:
-  init    Scaffold repos.yaml, policies/default.yaml, logs/
-  repos   List configured repos
-  doctor  Validate global tools and configured repos
+  init      Scaffold repos.yaml, policies/default.yaml, logs/
+  repos     List configured repos
+  doctor    Validate global tools and configured repos
+  download  Download Plane project pages to systems/<workspace>/<project>/
+  generate  Run the generator chain (markdown → spec drafts)
+  taskgen   Plane spec page → Plane epics/stories/tasks + Grava mirror
 """
 from __future__ import annotations
 
@@ -444,6 +447,63 @@ def cmd_generate(args: argparse.Namespace) -> None:
     sys.exit(mod.main(argv))
 
 
+# ── se taskgen ────────────────────────────────────────────────────────────────
+
+
+def cmd_taskgen(args: argparse.Namespace) -> None:
+    """Invoke agents/task-generator/cli/run.main directly.
+
+    Wraps the task-generator end-to-end orchestrator: Plane page →
+    Plane work items (epic/story/task) + blocking deps → Grava mirror
+    in target repo.
+    """
+    tg_cli = _repo_root() / "agents" / "task-generator" / "cli"
+    tg_root = _repo_root() / "agents" / "task-generator"
+    script = tg_cli / "run.py"
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+
+    # run.py imports siblings (parser, planner, plane_client, …) from
+    # agents/task-generator/ — keep that on sys.path so its `from parser
+    # import …` resolves. cli/ also needs to be importable for `write` +
+    # `grava` modules that run.py loads via `import write as write_cli`.
+    for p in (str(tg_root), str(tg_cli)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    mod = _load_module("taskgen_run", script)
+
+    argv = [args.project_id, args.page_id]
+    if args.target_repo:
+        argv += ["--target-repo", args.target_repo]
+    if args.no_clone:
+        argv.append("--no-clone")
+    if args.allow_duplicate_pages:
+        argv.append("--allow-duplicate-pages")
+    if args.dry_run:
+        argv.append("--dry-run")
+    if args.no_grava:
+        argv.append("--no-grava")
+    if args.yes:
+        argv.append("--yes")
+    if args.on_failure:
+        argv += ["--on-failure", args.on_failure]
+    if args.json_report:
+        argv += ["--json-report", args.json_report]
+    if args.run_id:
+        argv += ["--run-id", args.run_id]
+    if args.no_dep_reorder:
+        argv.append("--no-dep-reorder")
+    if args.allow_dep_cycles:
+        argv.append("--allow-dep-cycles")
+    if args.strict_deps:
+        argv.append("--strict-deps")
+    if args.no_plane_relations:
+        argv.append("--no-plane-relations")
+    sys.exit(mod.main(argv))
+
+
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
 
@@ -500,6 +560,39 @@ def main() -> None:
     p_gen.add_argument("--step", choices=("extract", "outline", "render"),
                        default=None, help="Run a single step")
 
+    p_tg = sub.add_parser(
+        "taskgen",
+        help="Plane spec page → Plane epics/stories/tasks + Grava mirror",
+    )
+    p_tg.add_argument("project_id", help="Plane project UUID")
+    p_tg.add_argument("page_id", help="Plane page UUID (the spec page)")
+    p_tg.add_argument("--target-repo", default=None, metavar="DIR",
+                      help="Override repo-map.yaml lookup")
+    p_tg.add_argument("--no-clone", action="store_true",
+                      help="Fail instead of auto-cloning a missing target repo")
+    p_tg.add_argument("--allow-duplicate-pages", action="store_true",
+                      help="Proceed even if Plane has duplicate pages with the same title")
+    p_tg.add_argument("--dry-run", action="store_true",
+                      help="Preview the plan only — skip all writes")
+    p_tg.add_argument("--no-grava", action="store_true",
+                      help="Skip Phase 3 Grava mirror (Plane writes only)")
+    p_tg.add_argument("--yes", action="store_true",
+                      help="Skip interactive confirmation prompts")
+    p_tg.add_argument("--on-failure", choices=("prompt", "rollback", "abort"),
+                      default=None, help="Behaviour when a Plane op fails")
+    p_tg.add_argument("--json-report", default=None, metavar="PATH",
+                      help="Write a JSON run summary to this path")
+    p_tg.add_argument("--run-id", default=None,
+                      help="Override run ID (default: UTC timestamp)")
+    p_tg.add_argument("--no-dep-reorder", action="store_true",
+                      help="Detect deps but keep markdown order")
+    p_tg.add_argument("--allow-dep-cycles", action="store_true",
+                      help="Continue when a dep cycle is detected")
+    p_tg.add_argument("--strict-deps", action="store_true",
+                      help="Fail when a dep ref cannot be resolved")
+    p_tg.add_argument("--no-plane-relations", action="store_true",
+                      help="Skip posting Plane `blocking` relations")
+
     args = parser.parse_args()
     {
         "init": cmd_init,
@@ -507,6 +600,7 @@ def main() -> None:
         "doctor": cmd_doctor,
         "download": cmd_download,
         "generate": cmd_generate,
+        "taskgen": cmd_taskgen,
     }[args.cmd](args)
 
 
