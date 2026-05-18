@@ -186,12 +186,18 @@ run_tc "TC11b deploy --team qa fails when backlog empty" \
 
 # ─────────────────────────────────────────────────────────────────────
 echo ""
-echo "## 5. Batch --all: agent-team gate (mode 3)"
+echo "## 5. Batch --all: epic-task hint loop (mode 3, hint-only team)"
 # ─────────────────────────────────────────────────────────────────────
 
-run_tc "TC12  --all --team epic-task → 'not an agent-team', exit 0" \
-    0 "is not an agent-team" \
-    o deploy --all --team epic-task --target-repo "$TARGET_REPO"
+# epic-task is no longer gated out — `--all --team epic-task` loops every
+# ready story/task and prints a /ship hint per item. No grava/Plane writes.
+run_tc "TC12  --all --team epic-task → loops + 'Batch hint:' header, exit 0" \
+    0 "Batch hint: team=epic-task" \
+    o deploy --all --team epic-task --target-repo "$TARGET_REPO" --limit 2
+
+run_tc "TC12b --all --team epic-task --limit 2 → 'hinted: 2' in summary" \
+    0 "hinted:" \
+    o deploy --all --team epic-task --target-repo "$TARGET_REPO" --limit 2
 
 # ─────────────────────────────────────────────────────────────────────
 echo ""
@@ -219,9 +225,9 @@ run_tc "TC16  --all --team fix-bug --dry-run honours empty queue report" \
     0 "Empty queue report" \
     o deploy --all --team fix-bug --target-repo "$TARGET_REPO" --dry-run
 
-run_tc "TC17  --all --team epic-task --dry-run hits agent-team gate first" \
-    0 "is not an agent-team" \
-    o deploy --all --team epic-task --target-repo "$TARGET_REPO" --dry-run
+run_tc "TC17  --all --team epic-task --dry-run lists /ship hint intents" \
+    0 "would print /ship hint" \
+    o deploy --all --team epic-task --target-repo "$TARGET_REPO" --dry-run --limit 2
 
 run_tc "TC18  --all --limit 5 accepted without --all (no-op): single-issue mode" \
     1 "No ready issues found for team=fix-bug" \
