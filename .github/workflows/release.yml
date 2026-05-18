@@ -74,25 +74,29 @@ jobs:
         run: bash scripts/build.sh --arch ${{ matrix.arch }}
 
       - name: rename artifacts to match target tag
-        # build.sh names by uname; on linux-arm64 runners that gives the right
-        # tag automatically. We still upload by the matrix `target` so the
-        # release-asset names stay deterministic.
+        # build.sh names by uname + arch. On GitHub Actions runners, uname
+        # gives the expected OS, and SE_TARGET_ARCH controls the build arch.
+        # If the file already has the target name, skip the move.
         run: |
           cd dist
-          # Move whichever se-*.tar.gz was built to the matrix target name.
+          TARGET="se-${{ matrix.target }}"
+          # Only rename if the file doesn't already have the target name
           shopt -s nullglob
           for f in se-*.tar.gz; do
-            mv "$f" "se-${{ matrix.target }}.tar.gz"
+            if [ "$f" != "$TARGET.tar.gz" ]; then
+              mv "$f" "$TARGET.tar.gz"
+            fi
           done
           for f in se-*.tar.gz.sha256; do
-            mv "$f" "se-${{ matrix.target }}.tar.gz.sha256"
+            if [ "$f" != "$TARGET.tar.gz.sha256" ]; then
+              mv "$f" "$TARGET.tar.gz.sha256"
+            fi
           done
-          # Recompute checksum against renamed tarball (filename appears in
-          # the .sha256 file).
+          # Recompute checksum against tarball (filename appears in the .sha256 file)
           if command -v shasum >/dev/null; then
-            shasum -a 256 "se-${{ matrix.target }}.tar.gz" > "se-${{ matrix.target }}.tar.gz.sha256"
+            shasum -a 256 "$TARGET.tar.gz" > "$TARGET.tar.gz.sha256"
           else
-            sha256sum "se-${{ matrix.target }}.tar.gz" > "se-${{ matrix.target }}.tar.gz.sha256"
+            sha256sum "$TARGET.tar.gz" > "$TARGET.tar.gz.sha256"
           fi
 
       - uses: actions/upload-artifact@v4
