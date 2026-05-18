@@ -168,10 +168,45 @@ ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
 _ENV_SETUP_MD = """\
 # Environment setup
 
-`se` reads Plane credentials from either source (env vars win on conflict):
+`se` reads Plane credentials from several sources, applied in this
+priority order (highest → lowest):
 
-1. `~/.config/plane/config.json` — `{ "host": "...", "workspace": "...", "token": "..." }`, mode `0600`.
-2. Env vars: `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
+1. **Direct env vars** — `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
+   Each takes precedence individually, so you can override just one
+   while still loading the others from a config file.
+2. **CLI flags** — `--plane-config PATH` and `--plane-profile NAME`
+   on Plane-touching subcommands (`se taskgen`, `se plane-sync`,
+   `se o doctor`, `se o expand`, `se o deploy`). They translate
+   directly to the env vars below.
+3. **`PLANE_CONFIG` env var** — absolute path to a JSON file.
+4. **`PLANE_PROFILE` env var** — short name `<X>` → loads `~/.config/plane/<X>.json`.
+5. **Default `~/.config/plane/config.json`** — fallback if nothing above
+   resolves.
+
+All config files share the same schema:
+
+```json
+{ "host": "https://api.plane.so", "workspace": "<slug>", "token": "plane_api_..." }
+```
+
+Keep them mode `0600`. Drop one per workspace to switch without editing
+the default file:
+
+```bash
+# Multi-workspace setup (e.g. work + sandbox)
+~/.config/plane/config.json            # default (e.g. work)
+~/.config/plane/stellar-sandbox.json   # PLANE_PROFILE=stellar-sandbox
+~/.config/plane/staging.json           # PLANE_PROFILE=staging
+chmod 600 ~/.config/plane/*.json
+```
+
+Then target a profile per call:
+
+```bash
+se taskgen <project> <page> --plane-profile stellar-sandbox --yes
+PLANE_PROFILE=stellar-sandbox se o doctor --target-repo /tmp/sandbox-repo
+se o expand <epic-id> --plane-config ~/.config/plane/staging.json
+```
 
 ## Quick start (.env recipe)
 
@@ -193,6 +228,8 @@ To make the values persist across shells, source `.env` from your shell rc
 | `PLANE_WORKSPACE` | Every `se` command that touches Plane | both | Slug in your Plane URL |
 | `PLANE_HOST` | Same | both | `https://api.plane.so` for hosted, or your self-host URL |
 | `PLANE_API_TOKEN` | Same | both | Plane → Settings → API tokens → Create |
+| `PLANE_PROFILE` | Switching between multiple `~/.config/plane/<name>.json` files | both | Any short identifier (e.g. `stellar-sandbox`, `staging`) |
+| `PLANE_CONFIG` | Loading creds from an arbitrary JSON path | both | Absolute file path. Overrides `PLANE_PROFILE`. |
 | `STELLAR_ENGINE_HOME` | `grava signal` hooks calling `grava_plane_sync.py` directly | **source only** | Absolute path to your `stellar-engine` checkout |
 | `ANTHROPIC_API_KEY` | Generator Phase D (deferred) | both | <https://console.anthropic.com/> → API Keys |
 
@@ -1066,6 +1103,7 @@ def cmd_taskgen(args: argparse.Namespace) -> None:
         if p not in sys.path:
             sys.path.insert(0, p)
 
+    _apply_plane_profile_env(args)
     mod = _load_module("taskgen_run", script)
 
     argv = [args.project_id, args.page_id]
@@ -1111,6 +1149,7 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
 
     # grava_plane_sync.py performs its own sys.path.insert for
     # agents/task-generator/, so its `from plane_client import …` resolves.
+    _apply_plane_profile_env(args)
     mod = _load_module("grava_plane_sync", script)
 
     argv: list[str] = []
@@ -1165,6 +1204,54 @@ _ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
 _AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator")
 
 
+def _add_plane_profile_flags(p: argparse.ArgumentParser) -> None:
+    """Attach `--plane-profile NAME` and `--plane-config PATH` to a subparser.
+
+    Both flags are alternatives to setting PLANE_PROFILE / PLANE_CONFIG in
+    the shell environment before calling `se`. The `_apply_plane_profile_env`
+    helper translates them into the same env vars right before dispatching
+    the underlying script, so the resolver in plane_client / grava_plane_sync
+    / orchestrator's doctor.py picks them up uniformly.
+
+    Use on every `se` subparser whose dispatched script ends up reading
+    Plane credentials (taskgen, plane-sync, `o doctor`, `o expand`,
+    `o deploy`).
+    """
+    p.add_argument(
+        "--plane-profile", default=None, metavar="NAME",
+        help="Load creds from ~/.config/plane/<NAME>.json instead of the "
+             "default config.json. Equivalent to PLANE_PROFILE env var.",
+    )
+    p.add_argument(
+        "--plane-config", default=None, metavar="PATH",
+        help="Load creds from an explicit JSON file path. Overrides "
+             "--plane-profile and PLANE_PROFILE. Equivalent to PLANE_CONFIG "
+             "env var.",
+    )
+
+
+def _apply_plane_profile_env(args: argparse.Namespace) -> None:
+    """Translate --plane-profile / --plane-config flags to env vars.
+
+    Underlying scripts (plane_client.load_credentials, grava_plane_sync's
+    plane_configured, orchestrator/cli/doctor.check_plane_creds) read
+    PLANE_CONFIG and PLANE_PROFILE from os.environ. Setting them here
+    before dispatching the script (either in-process via _load_module or
+    in a subprocess inheriting environ) is enough to redirect them at
+    a different profile without changing any caller code downstream.
+
+    Precedence inside the underlying loader is:
+      PLANE_CONFIG  > PLANE_PROFILE  > default ~/.config/plane/config.json
+    so setting both here is fine — PLANE_CONFIG wins by design.
+    """
+    profile = getattr(args, "plane_profile", None)
+    config_path = getattr(args, "plane_config", None)
+    if profile:
+        os.environ["PLANE_PROFILE"] = profile
+    if config_path:
+        os.environ["PLANE_CONFIG"] = config_path
+
+
 def _orch_script(name: str) -> Path:
     """Resolve agents/orchestrator/cli/<name>.py inside the bundle / source tree."""
     return _repo_root().joinpath(*_ORCH_SCRIPT_DIR, name)
@@ -1203,6 +1290,7 @@ def cmd_orchestrator_pick(args: argparse.Namespace) -> None:
 
 
 def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
+    _apply_plane_profile_env(args)
     argv = ["--target-repo", args.target_repo]
     if args.json:
         argv.append("--json")
@@ -1210,6 +1298,7 @@ def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
 
 
 def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
+    _apply_plane_profile_env(args)
     argv = [args.epic_id, "--target-repo", args.target_repo]
     if args.dry_run:
         argv.append("--dry-run")
@@ -1368,6 +1457,7 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     drives subsequent phases (verify, pr, report) manually with
     `se o fix-bug verify|pr` / `se o qa report`.
     """
+    _apply_plane_profile_env(args)
     target_repo = args.target_repo
 
     # ── Mode 3: --all batch loop ─────────────────────────────────────────
@@ -1631,6 +1721,7 @@ def main() -> None:
                       help="Fail when a dep ref cannot be resolved")
     p_tg.add_argument("--no-plane-relations", action="store_true",
                       help="Skip posting Plane `blocking` relations")
+    _add_plane_profile_flags(p_tg)
 
     p_sync = sub.add_parser(
         "plane-sync",
@@ -1659,6 +1750,7 @@ def main() -> None:
                             "push: grava → Plane (status / assignee / comments). "
                             "both: pull then push."
                         ))
+    _add_plane_profile_flags(p_sync)
 
     # ── se orchestrator (alias: `se o`) ───────────────────────────────────────
     p_orch = sub.add_parser(
@@ -1691,6 +1783,7 @@ def main() -> None:
     )
     p_orch_doc.add_argument("--target-repo", default=".", metavar="PATH")
     p_orch_doc.add_argument("--json", action="store_true")
+    _add_plane_profile_flags(p_orch_doc)
 
     # se orchestrator expand <epic-id>
     p_orch_exp = orch_sub.add_parser(
@@ -1701,6 +1794,7 @@ def main() -> None:
     p_orch_exp.add_argument("--target-repo", default=".", metavar="PATH")
     p_orch_exp.add_argument("--dry-run", action="store_true",
                             help="task-generator Phase A preview only")
+    _add_plane_profile_flags(p_orch_exp)
 
     # se orchestrator deploy [<id>] [--team T]
     p_orch_dep = orch_sub.add_parser(
@@ -1729,6 +1823,7 @@ def main() -> None:
     p_orch_dep.add_argument("--stop-on-error", action="store_true",
                             help="With --all: bail at the first per-issue "
                                  "failure instead of continuing.")
+    _add_plane_profile_flags(p_orch_dep)
 
     # se orchestrator fix-bug {claim,verify,pr}
     p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")

@@ -9,7 +9,8 @@ from pathlib import Path
 
 import requests
 
-CONFIG_PATH = Path.home() / ".config" / "plane" / "config.json"
+CONFIG_DIR = Path.home() / ".config" / "plane"
+CONFIG_PATH = CONFIG_DIR / "config.json"
 DEFAULT_TIMEOUT_SECONDS = 30
 
 
@@ -21,13 +22,46 @@ class PlaneClientError(Exception):
         self.url = url
 
 
+def resolve_plane_config_path() -> Path:
+    """Resolve which Plane config JSON file to load.
+
+    Priority order (first match wins):
+      1. PLANE_CONFIG env var — explicit absolute path to a config JSON file
+      2. PLANE_PROFILE env var — short name → ~/.config/plane/<name>.json
+      3. Default ~/.config/plane/config.json
+
+    The function does NOT verify the file exists — callers handle that
+    so they can fall back to env-var-only credentials.
+    """
+    explicit = os.environ.get("PLANE_CONFIG", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    profile = os.environ.get("PLANE_PROFILE", "").strip()
+    if profile:
+        return CONFIG_DIR / f"{profile}.json"
+    return CONFIG_PATH
+
+
 def load_credentials() -> tuple[str, str, str]:
+    """Return (token, host, workspace) from env vars + config file.
+
+    Precedence (highest → lowest):
+      1. Direct env vars: PLANE_API_TOKEN, PLANE_HOST, PLANE_WORKSPACE
+         — each takes precedence individually (partial override works)
+      2. Config JSON file resolved by `resolve_plane_config_path()`
+         (PLANE_CONFIG > PLANE_PROFILE > default config.json)
+      3. host default: https://api.plane.so
+
+    Raises RuntimeError with a hint pointing at the resolved config path
+    if either token or workspace remain unset.
+    """
     token = os.environ.get("PLANE_API_TOKEN")
     host = os.environ.get("PLANE_HOST")
     workspace = os.environ.get("PLANE_WORKSPACE")
 
-    if not all([token, host, workspace]) and CONFIG_PATH.exists():
-        cfg = json.loads(CONFIG_PATH.read_text())
+    config_path = resolve_plane_config_path()
+    if not all([token, host, workspace]) and config_path.exists():
+        cfg = json.loads(config_path.read_text())
         token = token or cfg.get("token")
         host = host or cfg.get("host", "https://api.plane.so")
         workspace = workspace or cfg.get("workspace")
@@ -37,7 +71,8 @@ def load_credentials() -> tuple[str, str, str]:
     if not token or not workspace:
         raise RuntimeError(
             f"Missing Plane credentials. Set PLANE_API_TOKEN + PLANE_WORKSPACE env vars, "
-            f"or populate {CONFIG_PATH}."
+            f"or populate {config_path} "
+            f"(override location via PLANE_CONFIG or PLANE_PROFILE env vars)."
         )
 
     return token, host.rstrip("/"), workspace

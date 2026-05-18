@@ -69,6 +69,8 @@ se doctor --dir .                             # validate environment
 se generate path/to/spec.md --project DEMO    # turn markdown into spec drafts
 se download <plane-project-uuid>              # pull Plane pages → systems/
 se taskgen <project-uuid> <page-uuid> --yes   # Plane page → Plane issues + Grava mirror
+# Switch Plane workspace via profile: drop ~/.config/plane/<name>.json then:
+se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox
 
 # Orchestrator: route + dispatch grava issues to teams (fix-bug / qa / task-generator)
 # `se o` is shorthand for `se orchestrator` — both forms work identically.

@@ -121,6 +121,17 @@ issues so operators see what to do next.
 A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
 
+**Plane credentials.** Every subcommand that talks to Plane (`doctor`,
+`expand`, `deploy` when routing to `task-generator`) accepts
+`--plane-profile NAME` (loads `~/.config/plane/<NAME>.json`) and
+`--plane-config PATH` (arbitrary file). Both translate to the
+`PLANE_PROFILE` / `PLANE_CONFIG` env vars that `plane_client.load_credentials`
+honours. Direct env vars (`PLANE_API_TOKEN`, `PLANE_WORKSPACE`,
+`PLANE_HOST`) still take priority over any config file. The default
+`~/.config/plane/config.json` is used when none of the overrides are
+set. See the `cli/se` env-setup section in `se init`'s generated
+`docs/env-setup.md` for the full precedence table.
+
 ### Flag parsing (order-tolerant)
 
 ```bash

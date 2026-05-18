@@ -37,6 +37,12 @@ Credentials at `~/.config/plane/config.json` (chmod 600):
 
 Or env: `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
 
+**Multi-workspace**: drop additional files at `~/.config/plane/<name>.json`
+(same schema, also chmod 600) and select via `--plane-profile <name>`,
+`PLANE_PROFILE=<name>`, or `PLANE_CONFIG=<absolute path>`. Priority:
+direct env vars > `PLANE_CONFIG` > `PLANE_PROFILE` > default `config.json`.
+Applies to `se taskgen`, `se plane-sync`, `se o {doctor,expand,deploy}`.
+
 For the grava-side hooks (so each `grava signal` mirrors to Plane), see [`docs/grava-plane-sync-setup.md`](docs/grava-plane-sync-setup.md).
 
 ## Operator entry points

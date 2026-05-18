@@ -48,6 +48,7 @@ from plane_client import (  # noqa: E402
     PlaneClient,
     PlaneClientError,
     load_credentials,
+    resolve_plane_config_path,
 )
 
 DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "grava-plane-sync"
@@ -143,14 +144,20 @@ def save_state(state: WatcherState, path: Path) -> None:
 
 
 def plane_configured() -> bool:
-    """Return True if Plane credentials are reachable (env vars or config file)."""
+    """Return True if Plane credentials are reachable (env vars or config file).
+
+    Honours PLANE_CONFIG / PLANE_PROFILE env vars so callers running with
+    a non-default profile see the right file checked (and not just the
+    static `~/.config/plane/config.json`).
+    """
     env_token = os.environ.get("PLANE_API_TOKEN")
     env_ws = os.environ.get("PLANE_WORKSPACE")
     if env_token and env_ws:
         return True
-    if CONFIG_PATH.exists():
+    config_path = resolve_plane_config_path()
+    if config_path.exists():
         try:
-            cfg = json.loads(CONFIG_PATH.read_text())
+            cfg = json.loads(config_path.read_text())
         except json.JSONDecodeError:
             return False
         return bool(cfg.get("token") and cfg.get("workspace"))
@@ -875,7 +882,11 @@ def main(argv: list[str] | None = None) -> int:
             issue_id=issue_id,
             gate="no_creds",
             exit_code=0,
-            detail="PLANE_API_TOKEN/PLANE_WORKSPACE env unset and ~/.config/plane/config.json missing",
+            detail=(
+                f"PLANE_API_TOKEN/PLANE_WORKSPACE env unset and "
+                f"{resolve_plane_config_path()} missing "
+                f"(set PLANE_CONFIG or PLANE_PROFILE to use a different profile)"
+            ),
         )
         return 0
 
