@@ -130,6 +130,84 @@ heartbeat:
 """
 
 
+_ENV_EXAMPLE = """\
+# Stellar Engine — environment template
+# Copy to .env and fill in real values. .env should be gitignored.
+#
+#   cp .env.example .env
+#   chmod 600 .env
+#
+# Load into the current shell:
+#   set -a; source .env; set +a
+
+# ── Plane ─────────────────────────────────────────────────────────────────────
+# Workspace slug from your Plane URL: https://app.plane.so/<workspace>/
+PLANE_WORKSPACE=your-workspace
+PLANE_HOST=https://api.plane.so
+# Create in Plane → Settings → API tokens
+PLANE_API_TOKEN=plane_api_REPLACE_ME
+
+# ── Stellar engine home (for grava agent hooks calling grava_plane_sync.py) ──
+STELLAR_ENGINE_HOME=/absolute/path/to/stellar-engine
+
+# ── Anthropic (generator LLM step, Phase D — deferred today) ─────────────────
+# Required only when the generator's outline step is invoked via the SDK.
+# Today the outline step runs manually via a Claude Code session, so this
+# can stay as REPLACE_ME until Phase D ships.
+ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
+"""
+
+
+_ENV_SETUP_MD = """\
+# Environment setup
+
+`se` reads Plane credentials from either source (env vars win on conflict):
+
+1. `~/.config/plane/config.json` — `{ "host": "...", "workspace": "...", "token": "..." }`, mode `0600`.
+2. Env vars: `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
+
+## Quick start (.env recipe)
+
+```bash
+cp .env.example .env
+chmod 600 .env
+$EDITOR .env                     # fill in real values
+set -a; source .env; set +a      # load into the current shell
+```
+
+To make the values persist across shells, source `.env` from your shell rc
+(`~/.zshrc`, `~/.bashrc`, …) — or use a tool like `direnv` to auto-load on
+`cd`.
+
+## What each variable does
+
+| Var | Required for | Where to get it |
+|-----|--------------|-----------------|
+| `PLANE_WORKSPACE` | Every `se` command that touches Plane | Slug in your Plane URL |
+| `PLANE_HOST` | Same | `https://api.plane.so` for hosted, or your self-host URL |
+| `PLANE_API_TOKEN` | Same | Plane → Settings → API tokens → Create |
+| `STELLAR_ENGINE_HOME` | `grava signal` hooks invoking `grava_plane_sync.py` | Absolute path to your `stellar-engine` checkout |
+| `ANTHROPIC_API_KEY` | Generator Phase D (deferred) | <https://console.anthropic.com/> → API Keys |
+
+## Verify
+
+```bash
+se doctor --dir .
+```
+
+`doctor` warns if `.env` is missing, errors if required tools (`grava`, `gh`,
+`tmux`, `claude`) are not on `PATH`, and reports the resolved generator deps.
+
+## Security
+
+- **Never commit `.env`.** It is in `.gitignore` by default — keep it that
+  way.
+- `~/.config/plane/config.json` must be mode `0600`. `setup.sh` enforces this.
+- Rotate `PLANE_API_TOKEN` immediately if it leaks into git history. See
+  `docs/grava-plane-sync-setup.md` for the rotation playbook.
+"""
+
+
 # ── se init ───────────────────────────────────────────────────────────────────
 
 
@@ -155,6 +233,8 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     _scaffold_file(base / "repos.yaml", _REPOS_YAML)
     _scaffold_file(base / "policies" / "default.yaml", _POLICIES_YAML)
+    _scaffold_file(base / ".env.example", _ENV_EXAMPLE)
+    _scaffold_file(base / "docs" / "env-setup.md", _ENV_SETUP_MD)
     _scaffold_dir(base / "logs")
 
     for p in created:
