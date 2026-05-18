@@ -2,7 +2,9 @@
 """se — Stellar Engine operator CLI.
 
 Subcommands:
-  init         Scaffold repos.yaml, policies/default.yaml, logs/
+  init         Scaffold repos.yaml, policies/, logs/, .env.example,
+               docs/env-setup.md, and .claude/{agents,commands}/ for the
+               three bundled sub-agents and slash commands
   repos        List or modify configured repos
     repos list  List entries (default action)
     repos add   Register a new repo (and `grava init` it if needed)
@@ -227,6 +229,119 @@ se doctor --dir .
 """
 
 
+# ── Claude Code subagents + slash commands ────────────────────────────────────
+#
+# `se init` materialises the three bundled sub-agent definitions into
+# <base>/.claude/agents/<name>.md and the three slash-command stubs into
+# <base>/.claude/commands/<name>.md so an operator running `claude` in <base>
+# immediately sees `/deploy`, `/generate`, `/qa` plus the three sub-agents.
+#
+# Agent .md sources are bundled by scripts/build.sh (`--add-data agents:agents`)
+# so this works for both source checkouts and the PyInstaller --onefile binary
+# (sys._MEIPASS resolves to the extracted bundle root inside _repo_root()).
+
+_SUBAGENTS = ("generator", "task-generator", "orchestrator")
+
+
+_DEPLOY_COMMAND_MD = """\
+---
+description: Route + dispatch grava issues via the orchestrator agent.
+---
+
+`/deploy [<id>] [--team fix-bug|qa|task-generator|epic-task] [--parallel] [--retry] [--skip-verify]`
+
+Delegates to the **orchestrator** sub-agent. See
+`.claude/agents/orchestrator.md` for the full pipeline (route, fix-bug, QA,
+epic-task, task-generator expand).
+
+With `<id>`: routes a single issue. Without: picks next ready item per team.
+`--parallel` fans out across all four teams.
+"""
+
+
+_GENERATE_COMMAND_MD = """\
+---
+description: Plane spec page → Plane epics/stories/tasks + Grava mirror (task-generator).
+---
+
+`/generate [<page_id>] [--project <project_id>] [--dry-run]`
+
+Delegates to the **task-generator** sub-agent. With `<page_id>` + `<project_id>`:
+runs the three-phase pipeline (preview → Plane writes → Grava mirror). Without:
+the **orchestrator** auto-picks the next epic from the backlog.
+
+Equivalent CLI: `se taskgen <project_id> <page_id> --yes`.
+"""
+
+
+_QA_COMMAND_MD = """\
+---
+description: Run the QA checklist pipeline on a grava issue labelled `qa-ready`.
+---
+
+`/qa <id> [--checklist <path>] [--type cli|api|web|mobile] [--batch <label>]`
+
+Delegates to the **orchestrator** sub-agent's QA team
+(`docs/repository-folder-level-orchestrator/ORCHESTRATOR_AGENT.md`). Loads a
+checklist (explicit path → `--type` template → wisp → repo default → bundled
+default), runs the review, posts a report comment, and labels the issue
+`qa-passed` or `qa-failed`.
+"""
+
+
+_CLAUDE_COMMANDS = {
+    "deploy": _DEPLOY_COMMAND_MD,
+    "generate": _GENERATE_COMMAND_MD,
+    "qa": _QA_COMMAND_MD,
+}
+
+
+def _install_claude_assets(
+    base: Path,
+    *,
+    force: bool = False,
+) -> tuple[list[str], list[str], list[str]]:
+    """Materialise sub-agents + slash-commands under <base>/.claude/.
+
+    Returns (created, skipped, missing_sources). `missing_sources` is non-empty
+    only when the bundled `agents/<name>/AGENT.md` cannot be located — that
+    indicates a broken bundle, not an operator error.
+    """
+    created: list[str] = []
+    skipped: list[str] = []
+    missing: list[str] = []
+
+    src_root = _repo_root()
+    agents_dir = base / ".claude" / "agents"
+    commands_dir = base / ".claude" / "commands"
+
+    # Sub-agents: copy AGENT.md → .claude/agents/<name>.md
+    for name in _SUBAGENTS:
+        src = src_root / "agents" / name / "AGENT.md"
+        if not src.exists():
+            missing.append(str(src))
+            continue
+        dst = agents_dir / f"{name}.md"
+        if dst.exists() and not force:
+            skipped.append(str(dst))
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text())
+        created.append(str(dst))
+
+    # Slash-command stubs (inline templates — no external source)
+    for name, content in _CLAUDE_COMMANDS.items():
+        dst = commands_dir / f"{name}.md"
+        if dst.exists() and not force:
+            skipped.append(str(dst))
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(content)
+        created.append(str(dst))
+
+    return created, skipped, missing
+
+
 # ── se init ───────────────────────────────────────────────────────────────────
 
 
@@ -255,6 +370,23 @@ def cmd_init(args: argparse.Namespace) -> None:
     _scaffold_file(base / ".env.example", _ENV_EXAMPLE)
     _scaffold_file(base / "docs" / "env-setup.md", _ENV_SETUP_MD)
     _scaffold_dir(base / "logs")
+
+    # Materialise Claude Code sub-agents + slash commands under .claude/
+    # so an operator running `claude` in this dir sees /deploy, /generate,
+    # /qa and the three sub-agents immediately.
+    if not getattr(args, "no_claude_assets", False):
+        ca_created, ca_skipped, ca_missing = _install_claude_assets(
+            base, force=getattr(args, "force_claude_assets", False)
+        )
+        created.extend(ca_created)
+        skipped.extend(ca_skipped)
+        if ca_missing:
+            print(
+                "  warning  bundled AGENT.md sources not found "
+                "(broken bundle?):"
+            )
+            for m in ca_missing:
+                print(f"           {m}")
 
     for p in created:
         print(f"  created  {p}")
@@ -1015,9 +1147,19 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
     sub.required = True
 
-    p_init = sub.add_parser("init", help="Scaffold repos.yaml, policies/default.yaml, logs/")
+    p_init = sub.add_parser(
+        "init",
+        help="Scaffold repos.yaml, policies/default.yaml, logs/, "
+             ".env.example, docs/env-setup.md, .claude/agents/, .claude/commands/",
+    )
     p_init.add_argument("--dir", default=".", metavar="DIR",
                         help="Directory to scaffold into (default: cwd)")
+    p_init.add_argument("--no-claude-assets", action="store_true",
+                        dest="no_claude_assets",
+                        help="Skip installing .claude/agents/ and .claude/commands/")
+    p_init.add_argument("--force-claude-assets", action="store_true",
+                        dest="force_claude_assets",
+                        help="Overwrite existing .claude/{agents,commands}/*.md")
 
     p_repos = sub.add_parser("repos", help="List or modify configured repos")
     repos_sub = p_repos.add_subparsers(dest="repos_cmd", metavar="ACTION")
