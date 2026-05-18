@@ -81,26 +81,61 @@ def check_stellar_engine_home() -> Check:
     return Check("STELLAR_ENGINE_HOME", "ok", value)
 
 
+def _resolve_plane_config_path() -> Path:
+    """Mirror of plane_client.resolve_plane_config_path so this module
+    stays standalone (no agents/task-generator import).
+
+    Priority: PLANE_CONFIG > PLANE_PROFILE > ~/.config/plane/config.json.
+    """
+    explicit = os.environ.get("PLANE_CONFIG", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    profile = os.environ.get("PLANE_PROFILE", "").strip()
+    if profile:
+        return Path.home() / ".config" / "plane" / f"{profile}.json"
+    return Path.home() / ".config" / "plane" / "config.json"
+
+
 def check_plane_creds() -> Check:
     env_token = os.environ.get("PLANE_API_TOKEN")
     env_ws = os.environ.get("PLANE_WORKSPACE")
     if env_token and env_ws:
-        return Check("Plane credentials", "ok", "via env vars")
-    config_path = Path.home() / ".config" / "plane" / "config.json"
+        return Check(
+            "Plane credentials", "ok",
+            "via env vars (PLANE_API_TOKEN + PLANE_WORKSPACE)",
+        )
+    config_path = _resolve_plane_config_path()
+    profile_hint = ""
+    if "PLANE_PROFILE" in os.environ:
+        profile_hint = f" (profile={os.environ['PLANE_PROFILE']})"
+    elif "PLANE_CONFIG" in os.environ:
+        profile_hint = " (PLANE_CONFIG override)"
     if not config_path.exists():
         return Check(
             "Plane credentials",
             "warn",
-            "~/.config/plane/config.json absent. Run bash setup.sh to configure. "
-            "v0 grava→Plane sync will silently no-op until configured.",
+            f"{config_path} absent{profile_hint}. "
+            f"Run bash setup.sh to configure, set PLANE_PROFILE=<name> for "
+            f"~/.config/plane/<name>.json, or PLANE_CONFIG=<path> for an "
+            f"arbitrary file. v0 grava→Plane sync will silently no-op until "
+            f"configured.",
         )
     try:
         data = json.loads(config_path.read_text())
     except json.JSONDecodeError as exc:
-        return Check("Plane credentials", "error", f"config malformed: {exc}")
+        return Check(
+            "Plane credentials", "error",
+            f"config at {config_path} malformed: {exc}",
+        )
     if data.get("token") and data.get("workspace"):
-        return Check("Plane credentials", "ok", f"workspace={data['workspace']}")
-    return Check("Plane credentials", "error", "config present but missing token/workspace")
+        return Check(
+            "Plane credentials", "ok",
+            f"workspace={data['workspace']}  via {config_path}{profile_hint}",
+        )
+    return Check(
+        "Plane credentials", "error",
+        f"{config_path} present but missing token/workspace",
+    )
 
 
 def check_cron(target_repo: Path) -> Check:

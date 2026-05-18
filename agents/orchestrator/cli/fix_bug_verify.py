@@ -59,7 +59,7 @@ def save_checkpoint(state_file: Path, data: dict) -> None:
     tmp.replace(state_file)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("id", help="Grava bug issue ID")
     parser.add_argument("--target-repo", default=".")
@@ -67,7 +67,7 @@ def main() -> None:
                         help="Skip all checks and force PASS verdict")
     parser.add_argument("--actor", default="fix-bug-verifier")
     parser.add_argument("--state-file", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
     worktree = os.path.join(cwd, ".worktree", args.id)
@@ -140,7 +140,7 @@ def main() -> None:
         )
         wisp_write(args.id, "pipeline_phase", "coding_complete", cwd)
         print(json.dumps(result))
-        sys.exit(0)
+        return 0
 
     # Fail path
     failing = [k for k, v in details.items() if not v["pass"]]
@@ -153,7 +153,7 @@ def main() -> None:
     if attempt <= MAX_RETRIES:
         print("Fix the failing checks in the worktree and re-run fix_bug_verify.py.", file=sys.stderr)
         print(json.dumps(result))
-        sys.exit(5)
+        return 5
 
     # Max retries exceeded
     subprocess.run(
@@ -162,8 +162,8 @@ def main() -> None:
     )
     print(f"Max retries exceeded. Labeled 'needs-human'. Manual intervention required.", file=sys.stderr)
     print(json.dumps(result))
-    sys.exit(2)
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

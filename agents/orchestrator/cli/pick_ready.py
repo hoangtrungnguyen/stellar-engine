@@ -54,7 +54,7 @@ def _labels(node: dict) -> list[str]:
     return [str(lb) for lb in raw]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--team", required=True,
@@ -62,7 +62,7 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--target-repo", default=".")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
     results: list[dict] = []
@@ -139,7 +139,8 @@ def main() -> None:
                     break
 
     print(json.dumps(results))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

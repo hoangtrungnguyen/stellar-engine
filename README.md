@@ -63,12 +63,23 @@ bash scripts/build.sh           # produces dist/se-<os>-<arch>/se
 ## Quick start
 
 ```bash
-se --version                               # report which build you have
+se --version                                  # report which build you have
 se --help
-se doctor --dir .                          # validate environment
-se generate path/to/spec.md --project DEMO # turn markdown into spec drafts
-se download <plane-project-uuid>           # pull Plane pages → systems/
-se taskgen <project-uuid> <page-uuid> --yes # Plane page → Plane issues + Grava mirror
+se doctor --dir .                             # validate environment
+se generate path/to/spec.md --project DEMO    # turn markdown into spec drafts
+se download <plane-project-uuid>              # pull Plane pages → systems/
+se taskgen <project-uuid> <page-uuid> --yes   # Plane page → Plane issues + Grava mirror
+# Switch Plane workspace via profile: drop ~/.config/plane/<name>.json then:
+se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox
+
+# Orchestrator: route + dispatch grava issues to teams (fix-bug / qa / task-generator)
+# `se o` is shorthand for `se orchestrator` — both forms work identically.
+se o doctor --target-repo <repo>              # verify env for sub-pipelines
+se o pick --team fix-bug --target-repo <repo>          # next ready bug
+se o route <issue-id> --target-repo <repo>             # classify team
+se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0 (single issue)
+se o deploy --all --team T --target-repo <repo>        # batch: Phase 0 for every ready issue
+se o expand <epic-id> --target-repo <repo>             # epic → task-generator
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture and [`docs/install.md`](docs/install.md) for build/release details.
@@ -77,12 +88,14 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture and [`docs/install.md`](d
 
 The single `se` executable bundles:
 
-- The `se` operator CLI (`init`, `repos`, `doctor`, `download`, `generate`).
+- The `se` operator CLI (`init`, `repos`, `doctor`, `download`, `generate`, `taskgen`, `plane-sync`, `orchestrator` / `o`).
 - The generator agent (markdown → reviewable spec drafts).
+- The task-generator agent (Plane spec page → Plane work items + Grava mirror).
+- The orchestrator agent's one-shot scripts (route, pick, fix-bug / QA / task-generator phase steps).
 - The Plane I/O scripts (`upload_project_pages.py`, `download_project_pages.py`).
 - Python deps (`pyyaml`, `markdown`, `markdownify`, `requests`).
 
-The task-generator and orchestrator agents still ship as separate scripts under `agents/` — they're invoked from inside a Claude Code session, not directly from the binary.
+A continuous-loop fleet daemon (`se o run`) is planned — see [`docs/orchestrator/daemon-plan.md`](docs/orchestrator/daemon-plan.md). Until then, `se o deploy` fires a single Phase 0 step per call.
 
 ## License
 

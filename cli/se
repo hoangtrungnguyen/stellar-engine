@@ -168,10 +168,45 @@ ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
 _ENV_SETUP_MD = """\
 # Environment setup
 
-`se` reads Plane credentials from either source (env vars win on conflict):
+`se` reads Plane credentials from several sources, applied in this
+priority order (highest → lowest):
 
-1. `~/.config/plane/config.json` — `{ "host": "...", "workspace": "...", "token": "..." }`, mode `0600`.
-2. Env vars: `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
+1. **Direct env vars** — `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
+   Each takes precedence individually, so you can override just one
+   while still loading the others from a config file.
+2. **CLI flags** — `--plane-config PATH` and `--plane-profile NAME`
+   on Plane-touching subcommands (`se taskgen`, `se plane-sync`,
+   `se o doctor`, `se o expand`, `se o deploy`). They translate
+   directly to the env vars below.
+3. **`PLANE_CONFIG` env var** — absolute path to a JSON file.
+4. **`PLANE_PROFILE` env var** — short name `<X>` → loads `~/.config/plane/<X>.json`.
+5. **Default `~/.config/plane/config.json`** — fallback if nothing above
+   resolves.
+
+All config files share the same schema:
+
+```json
+{ "host": "https://api.plane.so", "workspace": "<slug>", "token": "plane_api_..." }
+```
+
+Keep them mode `0600`. Drop one per workspace to switch without editing
+the default file:
+
+```bash
+# Multi-workspace setup (e.g. work + sandbox)
+~/.config/plane/config.json            # default (e.g. work)
+~/.config/plane/stellar-sandbox.json   # PLANE_PROFILE=stellar-sandbox
+~/.config/plane/staging.json           # PLANE_PROFILE=staging
+chmod 600 ~/.config/plane/*.json
+```
+
+Then target a profile per call:
+
+```bash
+se taskgen <project> <page> --plane-profile stellar-sandbox --yes
+PLANE_PROFILE=stellar-sandbox se o doctor --target-repo /tmp/sandbox-repo
+se o expand <epic-id> --plane-config ~/.config/plane/staging.json
+```
 
 ## Quick start (.env recipe)
 
@@ -193,6 +228,8 @@ To make the values persist across shells, source `.env` from your shell rc
 | `PLANE_WORKSPACE` | Every `se` command that touches Plane | both | Slug in your Plane URL |
 | `PLANE_HOST` | Same | both | `https://api.plane.so` for hosted, or your self-host URL |
 | `PLANE_API_TOKEN` | Same | both | Plane → Settings → API tokens → Create |
+| `PLANE_PROFILE` | Switching between multiple `~/.config/plane/<name>.json` files | both | Any short identifier (e.g. `stellar-sandbox`, `staging`) |
+| `PLANE_CONFIG` | Loading creds from an arbitrary JSON path | both | Absolute file path. Overrides `PLANE_PROFILE`. |
 | `STELLAR_ENGINE_HOME` | `grava signal` hooks calling `grava_plane_sync.py` directly | **source only** | Absolute path to your `stellar-engine` checkout |
 | `ANTHROPIC_API_KEY` | Generator Phase D (deferred) | both | <https://console.anthropic.com/> → API Keys |
 
@@ -1066,6 +1103,7 @@ def cmd_taskgen(args: argparse.Namespace) -> None:
         if p not in sys.path:
             sys.path.insert(0, p)
 
+    _apply_plane_profile_env(args)
     mod = _load_module("taskgen_run", script)
 
     argv = [args.project_id, args.page_id]
@@ -1111,6 +1149,7 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
 
     # grava_plane_sync.py performs its own sys.path.insert for
     # agents/task-generator/, so its `from plane_client import …` resolves.
+    _apply_plane_profile_env(args)
     mod = _load_module("grava_plane_sync", script)
 
     argv: list[str] = []
@@ -1129,6 +1168,423 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
         argv += ["--direction", args.direction]
 
     sys.exit(mod.main(argv))
+
+
+# ── se orchestrator ───────────────────────────────────────────────────────────
+#
+# Thin wrappers around agents/orchestrator/cli/*.py.  Each script's main()
+# was refactored to accept argv: list[str] | None for in-process dispatch
+# (same pattern as cmd_taskgen / cmd_plane_sync, PyInstaller-friendly).
+#
+# Subcommand tree:
+#   se orchestrator route       <id>
+#   se orchestrator pick        --team {fix-bug|epic-task|qa|task-generator}
+#   se orchestrator doctor
+#   se orchestrator expand      <epic-id>          # task-generator delegate
+#   se orchestrator fix-bug claim   <id>
+#   se orchestrator fix-bug verify  <id>
+#   se orchestrator fix-bug pr      <id>
+#   se orchestrator qa load     <id> [--type ...]
+#   se orchestrator qa report   <id> --results-file ...
+#   se orchestrator deploy      [<id>] [--team T]  # route + Phase 0 entry
+#
+# `deploy` is the operator's "start orchestrator" entry: routes a single
+# issue (or auto-picks one) and kicks off the team's Phase 0 step.
+# Multi-phase pipelines (fix-bug, QA) still need human-in-loop between
+# phases — `deploy` only fires the first step.
+
+
+_ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
+
+
+# Teams that have a Phase 0 dispatch script (an "agent") and can be looped
+# in `se o deploy --all`. `epic-task` is intentionally absent — it does
+# not have an `se`-side agent today; it dispatches to the `/ship` slash
+# command which only runs inside a Claude Code session.
+_AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator")
+
+
+def _add_plane_profile_flags(p: argparse.ArgumentParser) -> None:
+    """Attach `--plane-profile NAME` and `--plane-config PATH` to a subparser.
+
+    Both flags are alternatives to setting PLANE_PROFILE / PLANE_CONFIG in
+    the shell environment before calling `se`. The `_apply_plane_profile_env`
+    helper translates them into the same env vars right before dispatching
+    the underlying script, so the resolver in plane_client / grava_plane_sync
+    / orchestrator's doctor.py picks them up uniformly.
+
+    Use on every `se` subparser whose dispatched script ends up reading
+    Plane credentials (taskgen, plane-sync, `o doctor`, `o expand`,
+    `o deploy`).
+    """
+    p.add_argument(
+        "--plane-profile", default=None, metavar="NAME",
+        help="Load creds from ~/.config/plane/<NAME>.json instead of the "
+             "default config.json. Equivalent to PLANE_PROFILE env var.",
+    )
+    p.add_argument(
+        "--plane-config", default=None, metavar="PATH",
+        help="Load creds from an explicit JSON file path. Overrides "
+             "--plane-profile and PLANE_PROFILE. Equivalent to PLANE_CONFIG "
+             "env var.",
+    )
+
+
+def _apply_plane_profile_env(args: argparse.Namespace) -> None:
+    """Translate --plane-profile / --plane-config flags to env vars.
+
+    Underlying scripts (plane_client.load_credentials, grava_plane_sync's
+    plane_configured, orchestrator/cli/doctor.check_plane_creds) read
+    PLANE_CONFIG and PLANE_PROFILE from os.environ. Setting them here
+    before dispatching the script (either in-process via _load_module or
+    in a subprocess inheriting environ) is enough to redirect them at
+    a different profile without changing any caller code downstream.
+
+    Precedence inside the underlying loader is:
+      PLANE_CONFIG  > PLANE_PROFILE  > default ~/.config/plane/config.json
+    so setting both here is fine — PLANE_CONFIG wins by design.
+    """
+    profile = getattr(args, "plane_profile", None)
+    config_path = getattr(args, "plane_config", None)
+    if profile:
+        os.environ["PLANE_PROFILE"] = profile
+    if config_path:
+        os.environ["PLANE_CONFIG"] = config_path
+
+
+def _orch_script(name: str) -> Path:
+    """Resolve agents/orchestrator/cli/<name>.py inside the bundle / source tree."""
+    return _repo_root().joinpath(*_ORCH_SCRIPT_DIR, name)
+
+
+def _orch_invoke(script_name: str, mod_name: str, argv: list[str]) -> int:
+    """Load orch script and call its main(argv)."""
+    script = _orch_script(script_name)
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return 1
+    mod = _load_module(mod_name, script)
+    return mod.main(argv)
+
+
+def _orch_route_argv(issue_id: str, target_repo: str) -> list[str]:
+    return [issue_id, "--target-repo", target_repo]
+
+
+def _orch_pick_argv(team: str, target_repo: str, limit: int) -> list[str]:
+    return ["--team", team, "--target-repo", target_repo, "--limit", str(limit)]
+
+
+def cmd_orchestrator_route(args: argparse.Namespace) -> None:
+    sys.exit(_orch_invoke(
+        "route.py", "orch_route",
+        _orch_route_argv(args.id, args.target_repo),
+    ))
+
+
+def cmd_orchestrator_pick(args: argparse.Namespace) -> None:
+    sys.exit(_orch_invoke(
+        "pick_ready.py", "orch_pick_ready",
+        _orch_pick_argv(args.team, args.target_repo, args.limit),
+    ))
+
+
+def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
+    _apply_plane_profile_env(args)
+    argv = ["--target-repo", args.target_repo]
+    if args.json:
+        argv.append("--json")
+    sys.exit(_orch_invoke("doctor.py", "orch_doctor", argv))
+
+
+def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
+    _apply_plane_profile_env(args)
+    argv = [args.epic_id, "--target-repo", args.target_repo]
+    if args.dry_run:
+        argv.append("--dry-run")
+    sys.exit(_orch_invoke("task_gen_expand.py", "orch_task_gen_expand", argv))
+
+
+def cmd_orchestrator_fix_bug_claim(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    sys.exit(_orch_invoke("fix_bug_claim.py", "orch_fix_bug_claim", argv))
+
+
+def cmd_orchestrator_fix_bug_verify(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.skip_verify:
+        argv.append("--skip-verify")
+    if args.actor:
+        argv += ["--actor", args.actor]
+    if args.state_file:
+        argv += ["--state-file", args.state_file]
+    sys.exit(_orch_invoke("fix_bug_verify.py", "orch_fix_bug_verify", argv))
+
+
+def cmd_orchestrator_fix_bug_pr(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    if args.title:
+        argv += ["--title", args.title]
+    if args.draft:
+        argv.append("--draft")
+    sys.exit(_orch_invoke("fix_bug_pr.py", "orch_fix_bug_pr", argv))
+
+
+def cmd_orchestrator_qa_load(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.checklist:
+        argv += ["--checklist", args.checklist]
+    if args.type:
+        argv += ["--type", args.type]
+    if args.out:
+        argv += ["--out", args.out]
+    sys.exit(_orch_invoke("qa_load.py", "orch_qa_load", argv))
+
+
+def cmd_orchestrator_qa_report(args: argparse.Namespace) -> None:
+    argv = [args.id, "--results-file", args.results_file,
+            "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    sys.exit(_orch_invoke("qa_report.py", "orch_qa_report", argv))
+
+
+def _orch_pick_ids(team: str, target_repo: str, limit: int) -> list[str]:
+    """Run pick_ready.py as a subprocess and return the issue IDs.
+
+    Subprocess (not in-process) so we get a clean JSON capture on stdout —
+    pick_ready writes a JSON array and we need to parse it after each
+    call without interfering with other module-level state.
+    """
+    script = _orch_script("pick_ready.py")
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return []
+    r = subprocess.run(
+        [sys.executable, str(script),
+         "--team", team, "--target-repo", target_repo,
+         "--limit", str(limit)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(f"pick_ready({team}) failed: {r.stderr.strip()}", file=sys.stderr)
+        return []
+    try:
+        items = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [it.get("id", "") for it in items if it.get("id")]
+
+
+def _orch_route(issue_id: str, target_repo: str) -> tuple[int, dict]:
+    """Run route.py as a subprocess; return (exit_code, route_info_dict).
+
+    Subprocess so we can capture the JSON output without consuming sys.exit
+    inside the loop.
+    """
+    route_script = _orch_script("route.py")
+    if not route_script.exists():
+        print(f"ERROR: {route_script} not found", file=sys.stderr)
+        return 1, {}
+    r = subprocess.run(
+        [sys.executable, str(route_script),
+         issue_id, "--target-repo", target_repo],
+        capture_output=True, text=True,
+    )
+    print(r.stdout, end="")
+    if r.stderr:
+        print(r.stderr, end="", file=sys.stderr)
+    if r.returncode != 0:
+        return r.returncode, {}
+    try:
+        return 0, json.loads(r.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError):
+        print("ERROR: could not parse route.py output", file=sys.stderr)
+        return 2, {}
+
+
+def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
+    """Fire Phase 0 for resolved team. Returns dispatch exit code.
+
+    Uses subprocess (not _orch_invoke) so a single-issue dispatch does
+    not call sys.exit and prematurely terminate the --all loop.
+    """
+    if team == "fix-bug":
+        script_name = "fix_bug_claim.py"
+    elif team == "qa":
+        script_name = "qa_load.py"
+    elif team == "task-generator":
+        script_name = "task_gen_expand.py"
+    elif team == "epic-task":
+        print(
+            f"  Team 'epic-task' (task/story/subtask) currently runs via "
+            f"the /ship slash command in Claude Code — no `se` equivalent yet.\n"
+            f"  Run inside the target repo:  claude  →  /ship {issue_id}",
+            file=sys.stderr,
+        )
+        return 0
+    else:
+        print(f"ERROR: unknown team '{team}'", file=sys.stderr)
+        return 1
+
+    script = _orch_script(script_name)
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return 1
+    r = subprocess.run(
+        [sys.executable, str(script), issue_id, "--target-repo", target_repo],
+    )
+    return r.returncode
+
+
+def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
+    """Composite: route (or pick) → Phase 0 entry for the resolved team.
+
+    Three modes:
+    - With <id>: route the issue, then fire the team's Phase 0 step.
+    - Without <id>, no --all: pick next ready item for --team (or scan
+      all teams), then route + dispatch a single issue.
+    - With --all --team T: loop over every ready issue for team T
+      (capped by --limit, default 100), routing + dispatching each.
+      Default behaviour is continue-on-error; pass --stop-on-error
+      to bail on the first failure.
+
+    Multi-phase pipelines (fix-bug, QA) only get Phase 0 here. Operator
+    drives subsequent phases (verify, pr, report) manually with
+    `se o fix-bug verify|pr` / `se o qa report`.
+    """
+    _apply_plane_profile_env(args)
+    target_repo = args.target_repo
+
+    # ── Mode 3: --all batch loop ─────────────────────────────────────────
+    if args.all:
+        if args.id:
+            print("ERROR: --all cannot be combined with <id>", file=sys.stderr)
+            sys.exit(2)
+        if not args.team:
+            print("ERROR: --all requires --team T", file=sys.stderr)
+            sys.exit(2)
+
+        team = args.team
+
+        # Guard: only agent-teams (those with a Phase 0 dispatch script)
+        # are valid batch targets. epic-task has no agent — do nothing.
+        if team not in _AGENT_TEAMS:
+            print(
+                f"Team '{team}' is not an agent-team — no Phase 0 dispatch "
+                f"available from `se` (agent-teams: {', '.join(_AGENT_TEAMS)}).\n"
+                f"Nothing to do.",
+                file=sys.stderr,
+            )
+            sys.exit(0)
+
+        limit = args.limit or 100
+        ids = _orch_pick_ids(team, target_repo, limit)
+
+        # Empty-queue report — distinct from per-issue summary so the
+        # operator gets a clear "nothing to dispatch" signal.
+        if not ids:
+            print(f"── Empty queue report (team={team}) ──")
+            print(f"  repo:   {target_repo}")
+            print(f"  ready:  0 issues")
+            print(f"  hint:   inspect in-flight items with "
+                  f"`se o pick --team {team} --target-repo {target_repo}` "
+                  f"and `grava list` in the repo.")
+            print(f"  note:   nothing dispatched; no Phase 0 fired.")
+            sys.exit(0)
+
+        print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
+              f"(limit={limit}).")
+        if args.dry_run:
+            for iid in ids:
+                print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
+            sys.exit(0)
+
+        dispatched: list[str] = []
+        failed: list[tuple[str, int]] = []
+
+        for idx, iid in enumerate(ids, start=1):
+            print(f"\n[{idx}/{len(ids)}] {iid}")
+            rc, route_info = _orch_route(iid, target_repo)
+            if rc != 0:
+                failed.append((iid, rc))
+                if args.stop_on_error:
+                    break
+                continue
+
+            routed_team = route_info.get("team", "")
+            # Silent skip: if the picked issue doesn't actually belong to
+            # the requested agent-team (rare — labels changed since pick_ready
+            # ran), do nothing for it. Per user spec: "if the issues do not
+            # belong to an agent-team, do nothing." No log row, no count.
+            if routed_team != team:
+                continue
+
+            print(f"→ Dispatching {iid} to team={team} (Phase 0)")
+            rc = _orch_dispatch_phase0(iid, team, target_repo)
+            if rc == 0:
+                dispatched.append(iid)
+            else:
+                failed.append((iid, rc))
+                if args.stop_on_error:
+                    break
+
+        # Batch summary
+        print(f"\n── Batch summary (team={team}) ──")
+        print(f"  dispatched: {len(dispatched)}  "
+              f"failed: {len(failed)}  "
+              f"of {len(ids)} candidates")
+        for iid, rc in failed:
+            print(f"  failed {iid}: exit={rc}")
+        if not dispatched and not failed:
+            # All candidates were silently skipped (none belonged to the
+            # agent-team). Treat as empty-queue notification.
+            print(f"  note:  none of the {len(ids)} candidates routed to "
+                  f"team={team}; nothing dispatched.")
+        sys.exit(0 if not failed else 1)
+
+    # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────
+    issue_id = args.id
+    if not issue_id:
+        # Auto-pick from one team or scan all four teams (priority order)
+        teams = [args.team] if args.team else [
+            "fix-bug", "epic-task", "qa", "task-generator",
+        ]
+        for team in teams:
+            picked = _orch_pick_ids(team, target_repo, 1)
+            if picked:
+                issue_id = picked[0]
+                print(f"Auto-picked from team={team}: {issue_id}")
+                break
+        if not issue_id:
+            print(
+                f"No ready issues found for "
+                f"{'team='+args.team if args.team else 'any team'} in {target_repo}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    rc, route_info = _orch_route(issue_id, target_repo)
+    if rc != 0:
+        sys.exit(rc)
+
+    team = route_info.get("team", "")
+    if args.team and args.team != team:
+        print(
+            f"WARNING: --team={args.team} but routing classified {issue_id} as "
+            f"{team}. Using {team}.",
+            file=sys.stderr,
+        )
+    if args.dry_run:
+        print(f"[dry-run] Would dispatch {issue_id} to team={team} Phase 0.")
+        sys.exit(0)
+
+    print(f"\n→ Dispatching {issue_id} to team={team} (Phase 0)")
+    sys.exit(_orch_dispatch_phase0(issue_id, team, target_repo))
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -1265,6 +1721,7 @@ def main() -> None:
                       help="Fail when a dep ref cannot be resolved")
     p_tg.add_argument("--no-plane-relations", action="store_true",
                       help="Skip posting Plane `blocking` relations")
+    _add_plane_profile_flags(p_tg)
 
     p_sync = sub.add_parser(
         "plane-sync",
@@ -1293,8 +1750,153 @@ def main() -> None:
                             "push: grava → Plane (status / assignee / comments). "
                             "both: pull then push."
                         ))
+    _add_plane_profile_flags(p_sync)
+
+    # ── se orchestrator (alias: `se o`) ───────────────────────────────────────
+    p_orch = sub.add_parser(
+        "orchestrator",
+        aliases=["o"],
+        help="Route + dispatch grava issues to fix-bug / qa / task-generator teams"
+             " (shorthand: `se o`)",
+    )
+    orch_sub = p_orch.add_subparsers(dest="orch_cmd", metavar="ACTION")
+    orch_sub.required = True
+
+    # se orchestrator route <id>
+    p_orch_route = orch_sub.add_parser("route", help="Classify an issue's team")
+    p_orch_route.add_argument("id", help="Grava issue ID")
+    p_orch_route.add_argument("--target-repo", default=".", metavar="PATH")
+
+    # se orchestrator pick --team T
+    p_orch_pick = orch_sub.add_parser("pick", help="Next ready issue for a team")
+    p_orch_pick.add_argument(
+        "--team", required=True,
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+    )
+    p_orch_pick.add_argument("--limit", type=int, default=1)
+    p_orch_pick.add_argument("--target-repo", default=".", metavar="PATH")
+
+    # se orchestrator doctor
+    p_orch_doc = orch_sub.add_parser(
+        "doctor",
+        help="Verify env for orchestrator sub-pipelines + grava→Plane sync",
+    )
+    p_orch_doc.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_doc.add_argument("--json", action="store_true")
+    _add_plane_profile_flags(p_orch_doc)
+
+    # se orchestrator expand <epic-id>
+    p_orch_exp = orch_sub.add_parser(
+        "expand",
+        help="Resolve a grava epic's Plane page and delegate to task-generator",
+    )
+    p_orch_exp.add_argument("epic_id", help="Grava epic issue ID")
+    p_orch_exp.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_exp.add_argument("--dry-run", action="store_true",
+                            help="task-generator Phase A preview only")
+    _add_plane_profile_flags(p_orch_exp)
+
+    # se orchestrator deploy [<id>] [--team T]
+    p_orch_dep = orch_sub.add_parser(
+        "deploy",
+        help="Route + fire Phase 0 for an issue (auto-picks if <id> omitted; "
+             "use --all to batch over an entire team)",
+    )
+    p_orch_dep.add_argument("id", nargs="?", default=None,
+                            help="Grava issue ID. Omit to auto-pick.")
+    p_orch_dep.add_argument(
+        "--team", default=None,
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+        help="Filter for auto-pick / required for --all. "
+             "Ignored when <id> is given (route decides).",
+    )
+    p_orch_dep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_dep.add_argument("--dry-run", action="store_true",
+                            help="Route only — do not fire Phase 0")
+    p_orch_dep.add_argument("--all", action="store_true",
+                            help="Loop over every ready issue for --team T, "
+                                 "firing Phase 0 for each. Requires --team. "
+                                 "Default: continue on per-issue errors.")
+    p_orch_dep.add_argument("--limit", type=int, default=None,
+                            help="Max issues to pick when --all is set "
+                                 "(default: 100). Ignored otherwise.")
+    p_orch_dep.add_argument("--stop-on-error", action="store_true",
+                            help="With --all: bail at the first per-issue "
+                                 "failure instead of continuing.")
+    _add_plane_profile_flags(p_orch_dep)
+
+    # se orchestrator fix-bug {claim,verify,pr}
+    p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")
+    fb_sub = p_orch_fb.add_subparsers(dest="fb_cmd", metavar="PHASE")
+    fb_sub.required = True
+
+    p_fb_claim = fb_sub.add_parser("claim", help="Phase 0: claim bug + provision worktree")
+    p_fb_claim.add_argument("id", help="Grava bug issue ID")
+    p_fb_claim.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_claim.add_argument("--actor", default=None)
+
+    p_fb_ver = fb_sub.add_parser("verify", help="Phase 2: self-verify (tests/lint/build)")
+    p_fb_ver.add_argument("id", help="Grava bug issue ID")
+    p_fb_ver.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_ver.add_argument("--skip-verify", action="store_true",
+                          help="Force PASS verdict without running checks")
+    p_fb_ver.add_argument("--actor", default=None)
+    p_fb_ver.add_argument("--state-file", default=None, metavar="PATH")
+
+    p_fb_pr = fb_sub.add_parser("pr", help="Phase 3: push branch + open PR")
+    p_fb_pr.add_argument("id", help="Grava bug issue ID")
+    p_fb_pr.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_pr.add_argument("--actor", default=None)
+    p_fb_pr.add_argument("--title", default=None)
+    p_fb_pr.add_argument("--draft", action="store_true")
+
+    # se orchestrator qa {load,report}
+    p_orch_qa = orch_sub.add_parser("qa", help="QA pipeline phases")
+    qa_sub = p_orch_qa.add_subparsers(dest="qa_cmd", metavar="PHASE")
+    qa_sub.required = True
+
+    p_qa_load = qa_sub.add_parser("load", help="Phase 0: resolve + stage checklist")
+    p_qa_load.add_argument("id", help="Grava issue ID")
+    p_qa_load.add_argument("--target-repo", default=".", metavar="PATH")
+    p_qa_load.add_argument("--checklist", default=None, metavar="PATH")
+    p_qa_load.add_argument("--type", default=None,
+                           choices=("cli", "api", "web", "mobile"))
+    p_qa_load.add_argument("--out", default=None, metavar="PATH")
+
+    p_qa_rep = qa_sub.add_parser("report", help="Phase 2: render + post QA report")
+    p_qa_rep.add_argument("id", help="Grava issue ID")
+    p_qa_rep.add_argument("--results-file", required=True, metavar="PATH")
+    p_qa_rep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_qa_rep.add_argument("--actor", default=None)
 
     args = parser.parse_args()
+
+    # Two-level dispatch for `orchestrator <sub>` (alias: `o`)
+    if args.cmd in ("orchestrator", "o"):
+        orch_table = {
+            "route":  cmd_orchestrator_route,
+            "pick":   cmd_orchestrator_pick,
+            "doctor": cmd_orchestrator_doctor,
+            "expand": cmd_orchestrator_expand,
+            "deploy": cmd_orchestrator_deploy,
+        }
+        if args.orch_cmd in orch_table:
+            orch_table[args.orch_cmd](args)
+            return
+        if args.orch_cmd == "fix-bug":
+            {
+                "claim":  cmd_orchestrator_fix_bug_claim,
+                "verify": cmd_orchestrator_fix_bug_verify,
+                "pr":     cmd_orchestrator_fix_bug_pr,
+            }[args.fb_cmd](args)
+            return
+        if args.orch_cmd == "qa":
+            {
+                "load":   cmd_orchestrator_qa_load,
+                "report": cmd_orchestrator_qa_report,
+            }[args.qa_cmd](args)
+            return
+
     {
         "init": cmd_init,
         "repos": cmd_repos,

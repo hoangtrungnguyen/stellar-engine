@@ -100,13 +100,13 @@ def render_report(
     return "\n".join(lines)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("id", help="Grava issue ID")
     parser.add_argument("--results-file", required=True)
     parser.add_argument("--target-repo", default=".")
     parser.add_argument("--actor", default="qa-agent")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
 
@@ -205,7 +205,8 @@ def main() -> None:
         "fail_count": fail_count,
         "blocking": blocking,
     }))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

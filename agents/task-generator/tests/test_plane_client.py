@@ -15,7 +15,8 @@ from plane_client import PlaneClient, load_credentials  # noqa: E402
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    for var in ("PLANE_API_TOKEN", "PLANE_HOST", "PLANE_WORKSPACE"):
+    for var in ("PLANE_API_TOKEN", "PLANE_HOST", "PLANE_WORKSPACE",
+                "PLANE_CONFIG", "PLANE_PROFILE"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -51,8 +52,84 @@ def test_load_credentials_file_fallback(monkeypatch, tmp_path, clean_env):
 def test_load_credentials_missing_raises(monkeypatch, tmp_path, clean_env):
     fake_cfg = tmp_path / "nonexistent.json"
     monkeypatch.setattr(plane_client, "CONFIG_PATH", fake_cfg)
+    monkeypatch.setattr(plane_client, "CONFIG_DIR", tmp_path)
     with pytest.raises(RuntimeError, match="Missing Plane credentials"):
         load_credentials()
+
+
+# ── PLANE_PROFILE / PLANE_CONFIG profile resolution ──────────────────────────
+
+
+def test_resolve_plane_config_path_default(monkeypatch, clean_env):
+    """No PLANE_CONFIG / PLANE_PROFILE → falls back to module-level CONFIG_PATH."""
+    p = plane_client.resolve_plane_config_path()
+    assert p == plane_client.CONFIG_PATH
+
+
+def test_resolve_plane_config_path_profile(monkeypatch, tmp_path, clean_env):
+    """PLANE_PROFILE=foo → ~/.config/plane/foo.json (under CONFIG_DIR)."""
+    monkeypatch.setattr(plane_client, "CONFIG_DIR", tmp_path)
+    monkeypatch.setenv("PLANE_PROFILE", "stellar-sandbox")
+    p = plane_client.resolve_plane_config_path()
+    assert p == tmp_path / "stellar-sandbox.json"
+
+
+def test_resolve_plane_config_path_explicit_wins(monkeypatch, tmp_path, clean_env):
+    """PLANE_CONFIG=/abs/path beats PLANE_PROFILE."""
+    monkeypatch.setattr(plane_client, "CONFIG_DIR", tmp_path)
+    monkeypatch.setenv("PLANE_PROFILE", "ignored")
+    monkeypatch.setenv("PLANE_CONFIG", str(tmp_path / "custom.json"))
+    p = plane_client.resolve_plane_config_path()
+    assert p == tmp_path / "custom.json"
+
+
+def test_load_credentials_via_profile(monkeypatch, tmp_path, clean_env):
+    """PLANE_PROFILE=foo loads ~/.config/plane/foo.json instead of config.json."""
+    monkeypatch.setattr(plane_client, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(plane_client, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(json.dumps({
+        "token": "default-token", "workspace": "default-ws",
+        "host": "https://default.example",
+    }))
+    (tmp_path / "stellar-sandbox.json").write_text(json.dumps({
+        "token": "sandbox-token", "workspace": "stellar-sandbox",
+        "host": "https://sandbox.example",
+    }))
+    monkeypatch.setenv("PLANE_PROFILE", "stellar-sandbox")
+
+    token, host, ws = load_credentials()
+    assert token == "sandbox-token"
+    assert ws == "stellar-sandbox"
+    assert host == "https://sandbox.example"
+
+
+def test_load_credentials_via_explicit_config_path(monkeypatch, tmp_path, clean_env):
+    """PLANE_CONFIG=<absolute path> loads from that exact file."""
+    custom = tmp_path / "elsewhere" / "creds.json"
+    custom.parent.mkdir()
+    custom.write_text(json.dumps({
+        "token": "elsewhere-token", "workspace": "elsewhere-ws",
+    }))
+    monkeypatch.setenv("PLANE_CONFIG", str(custom))
+
+    token, _host, ws = load_credentials()
+    assert token == "elsewhere-token"
+    assert ws == "elsewhere-ws"
+
+
+def test_load_credentials_env_overrides_profile_partial(monkeypatch, tmp_path, clean_env):
+    """PLANE_API_TOKEN overrides the token from the profile file, but
+    workspace still comes from the file if not set in env."""
+    monkeypatch.setattr(plane_client, "CONFIG_DIR", tmp_path)
+    (tmp_path / "stellar-sandbox.json").write_text(json.dumps({
+        "token": "sandbox-token", "workspace": "stellar-sandbox",
+    }))
+    monkeypatch.setenv("PLANE_PROFILE", "stellar-sandbox")
+    monkeypatch.setenv("PLANE_API_TOKEN", "env-override-token")
+
+    token, _host, ws = load_credentials()
+    assert token == "env-override-token"  # env wins for token
+    assert ws == "stellar-sandbox"  # file wins for workspace
 
 
 def test_url_builder():

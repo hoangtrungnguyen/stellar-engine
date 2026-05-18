@@ -40,6 +40,98 @@ Orchestrator routing
 /qa <id> [--checklist <path>] [--type cli|api|web|mobile] [--batch <label>]
 ```
 
+### CLI entry (`se orchestrator`, alias `se o`)
+
+For operator use outside Claude Code, `cli/se` wraps the same scripts.
+All sub-commands accept `--target-repo PATH` (defaults to `.`).
+`se o <sub>` is the shorthand alias for `se orchestrator <sub>` — both
+forms accept identical arguments. Examples below use the shorthand.
+
+```
+se o route   <id>                        # classify team via grava type/labels
+se o pick    --team T   [--limit N]      # next ready issue for team T
+se o doctor                              # env + repo + cron checks
+se o expand  <epic-id>  [--dry-run]      # epic → task-generator delegate
+
+# Composite "start orchestrator" entry — auto-picks if <id> omitted
+se o deploy  [<id>]     [--team T] [--dry-run]
+
+# Batch loop: fire Phase 0 for EVERY ready issue on a team in this repo
+se o deploy --all --team T [--limit N] [--dry-run] [--stop-on-error]
+
+# Fix-bug pipeline phases
+se o fix-bug claim  <id>                 # Phase 0
+se o fix-bug verify <id> [--skip-verify] # Phase 2 (tests/lint/build)
+se o fix-bug pr     <id> [--draft]       # Phase 3 (push + gh pr create)
+
+# QA pipeline phases
+se o qa load   <id> [--checklist P|--type T]   # Phase 0
+se o qa report <id> --results-file P           # Phase 2
+```
+
+`deploy` routes the issue, then fires the team's Phase 0 (`fix_bug_claim`,
+`qa_load`, or `task_gen_expand`). For `epic-task` (task/story) it prints
+a hint to run `/ship <id>` inside Claude Code — no `se` equivalent yet.
+Multi-phase pipelines still need operator action between phases (the
+`Fix` / `Review` steps happen in Claude Code; only Phase 0 / 2 / 3 are
+CLI-driven).
+
+**Batch mode (`--all`).** When the operator wants Phase 0 fired for every
+ready issue on a team in a single repo (not just the next one), add
+`--all --team T`. The deploy command loops over `pick_ready`'s output
+(capped at `--limit N`, default 100) and dispatches each.
+
+Two guardrails:
+
+1. **Agent-team gate.** Only the three teams with an `se`-side Phase 0
+   dispatch script — `fix-bug`, `qa`, `task-generator` — are valid
+   `--all` targets. `epic-task` is not an agent-team (it dispatches to
+   the `/ship` slash command, which only runs inside Claude Code).
+   Running `se o deploy --all --team epic-task` prints a "not an
+   agent-team — nothing to do" notice and exits 0. The constant
+   `_AGENT_TEAMS` in `cli/se` is the single source of truth.
+
+2. **Silent skip on team mismatch.** Per-issue, if a picked candidate's
+   route resolves to a different team than `--team T` (rare — would
+   happen if labels changed between `pick_ready` and `route`), the
+   issue is silently skipped: no dispatch fires, no log row, no count
+   bump. "If the issues do not belong to an agent-team, do nothing."
+
+**Empty-queue report.** When `pick_ready` returns zero ready issues for
+a valid agent-team, `--all` emits a structured notification report
+instead of a bare line — repo path, ready-issue count (0), and a hint
+about how to inspect in-flight items (`se o pick`, `grava list`). This
+is the "no issue for an agent-team → make a report and notify the user"
+behaviour. Exit code stays 0.
+
+Default behaviour is continue-on-error: a per-issue failure logs a
+`failed <id>: exit=N` row in the summary but the loop keeps going. Pass
+`--stop-on-error` to bail at the first failure. Exit code is non-zero if
+any issue failed.
+
+`--all` requires `--team T` and is incompatible with an explicit `<id>`.
+Combine with `--dry-run` to preview the dispatch list without firing any
+Phase 0 steps. This is a one-tick batch — it does not respect the daemon
+plan's `max_concurrent` cap (that lives in `se o run`, not yet built).
+
+Single-issue mode (`se o deploy <id>` and `se o deploy --team T` without
+`--all`) is unchanged — it still prints the `/ship` hint for `epic-task`
+issues so operators see what to do next.
+
+A continuous-loop daemon (`se o run --repo <path>` polling
+the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
+
+**Plane credentials.** Every subcommand that talks to Plane (`doctor`,
+`expand`, `deploy` when routing to `task-generator`) accepts
+`--plane-profile NAME` (loads `~/.config/plane/<NAME>.json`) and
+`--plane-config PATH` (arbitrary file). Both translate to the
+`PLANE_PROFILE` / `PLANE_CONFIG` env vars that `plane_client.load_credentials`
+honours. Direct env vars (`PLANE_API_TOKEN`, `PLANE_WORKSPACE`,
+`PLANE_HOST`) still take priority over any config file. The default
+`~/.config/plane/config.json` is used when none of the overrides are
+set. See the `cli/se` env-setup section in `se init`'s generated
+`docs/env-setup.md` for the full precedence table.
+
 ### Flag parsing (order-tolerant)
 
 ```bash

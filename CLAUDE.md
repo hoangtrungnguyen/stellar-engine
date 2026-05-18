@@ -37,6 +37,12 @@ Credentials at `~/.config/plane/config.json` (chmod 600):
 
 Or env: `PLANE_API_TOKEN`, `PLANE_HOST`, `PLANE_WORKSPACE`.
 
+**Multi-workspace**: drop additional files at `~/.config/plane/<name>.json`
+(same schema, also chmod 600) and select via `--plane-profile <name>`,
+`PLANE_PROFILE=<name>`, or `PLANE_CONFIG=<absolute path>`. Priority:
+direct env vars > `PLANE_CONFIG` > `PLANE_PROFILE` > default `config.json`.
+Applies to `se taskgen`, `se plane-sync`, `se o {doctor,expand,deploy}`.
+
 For the grava-side hooks (so each `grava signal` mirrors to Plane), see [`docs/grava-plane-sync-setup.md`](docs/grava-plane-sync-setup.md).
 
 ## Operator entry points
@@ -66,12 +72,17 @@ python3 cli/se taskgen <project_id> <page_id> --dry-run
 python3 cli/se taskgen <project_id> <page_id> --yes        # writes Plane + Grava
 # (equivalent: python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes)
 
-# Route + dispatch a single grava issue
-python3 agents/orchestrator/cli/route.py <issue_id> --target-repo <path>
-# (orchestrator picks team and runs fix-bug / qa / task-generator / epic-task)
-
-# Manually probe ready backlog per team
-python3 agents/orchestrator/cli/pick_ready.py --team fix-bug --target-repo <path>
+# Orchestrator: route + dispatch grava issues to teams
+# `se o` is a shorthand alias for `se orchestrator` — both forms work identically.
+python3 cli/se o route <issue_id> --target-repo <path>
+python3 cli/se o pick --team fix-bug --target-repo <path>
+python3 cli/se o deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0 (single)
+python3 cli/se o deploy --all --team T --target-repo <path>     # batch: every ready issue on team T
+python3 cli/se o expand <epic-id> --target-repo <path>          # epic → task-generator
+python3 cli/se o fix-bug claim|verify|pr <id> --target-repo <path>
+python3 cli/se o qa load|report <id> --target-repo <path>
+python3 cli/se o doctor --target-repo <path>
+# (or the raw script: python3 agents/orchestrator/cli/{route,pick_ready,...}.py)
 
 # Sync local markdown to Plane
 python3 upload_project_pages.py <project-uuid> docs/
@@ -126,7 +137,7 @@ python3 upload_wiki_page.py docs/notes.md
 
 ## What this repo is NOT
 
-- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`, `plane-sync`.
+- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`, `taskgen`, `plane-sync`, and `orchestrator` / `o` (one-shot route/pick/deploy/expand + fix-bug + qa phase wrappers; `se o` is the shorthand alias). See [`docs/orchestrator/daemon-plan.md`](docs/orchestrator/daemon-plan.md) for the daemon plan.
 - A general task runner — scope is `grava` + `Plane` + `/ship` only.
 - A grava replacement — operates on grava via `--target-repo` flag; never modifies grava's data model except through wisps.
 - An LLM-driven spec writer — the Generator agent's outline step (Phase D) is deferred; today the operator hand-writes `outline.json` via a Claude Code session. The agent never calls the Anthropic API directly until Phase D ships.
