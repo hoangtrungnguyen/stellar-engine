@@ -1158,6 +1158,13 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
 _ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
 
 
+# Teams that have a Phase 0 dispatch script (an "agent") and can be looped
+# in `se o deploy --all`. `epic-task` is intentionally absent — it does
+# not have an `se`-side agent today; it dispatches to the `/ship` slash
+# command which only runs inside a Claude Code session.
+_AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator")
+
+
 def _orch_script(name: str) -> Path:
     """Resolve agents/orchestrator/cli/<name>.py inside the bundle / source tree."""
     return _repo_root().joinpath(*_ORCH_SCRIPT_DIR, name)
@@ -1373,10 +1380,31 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             sys.exit(2)
 
         team = args.team
+
+        # Guard: only agent-teams (those with a Phase 0 dispatch script)
+        # are valid batch targets. epic-task has no agent — do nothing.
+        if team not in _AGENT_TEAMS:
+            print(
+                f"Team '{team}' is not an agent-team — no Phase 0 dispatch "
+                f"available from `se` (agent-teams: {', '.join(_AGENT_TEAMS)}).\n"
+                f"Nothing to do.",
+                file=sys.stderr,
+            )
+            sys.exit(0)
+
         limit = args.limit or 100
         ids = _orch_pick_ids(team, target_repo, limit)
+
+        # Empty-queue report — distinct from per-issue summary so the
+        # operator gets a clear "nothing to dispatch" signal.
         if not ids:
-            print(f"No ready issues for team={team} in {target_repo}.")
+            print(f"── Empty queue report (team={team}) ──")
+            print(f"  repo:   {target_repo}")
+            print(f"  ready:  0 issues")
+            print(f"  hint:   inspect in-flight items with "
+                  f"`se o pick --team {team} --target-repo {target_repo}` "
+                  f"and `grava list` in the repo.")
+            print(f"  note:   nothing dispatched; no Phase 0 fired.")
             sys.exit(0)
 
         print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
@@ -1388,7 +1416,6 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
         dispatched: list[str] = []
         failed: list[tuple[str, int]] = []
-        skipped: list[tuple[str, str]] = []
 
         for idx, iid in enumerate(ids, start=1):
             print(f"\n[{idx}/{len(ids)}] {iid}")
@@ -1400,10 +1427,11 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
                 continue
 
             routed_team = route_info.get("team", "")
+            # Silent skip: if the picked issue doesn't actually belong to
+            # the requested agent-team (rare — labels changed since pick_ready
+            # ran), do nothing for it. Per user spec: "if the issues do not
+            # belong to an agent-team, do nothing." No log row, no count.
             if routed_team != team:
-                # Routing disagreed with the team filter. Skip — don't
-                # cross teams within a single --all batch.
-                skipped.append((iid, f"routed as {routed_team}, not {team}"))
                 continue
 
             print(f"→ Dispatching {iid} to team={team} (Phase 0)")
@@ -1415,16 +1443,18 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
                 if args.stop_on_error:
                     break
 
-        # Summary
+        # Batch summary
         print(f"\n── Batch summary (team={team}) ──")
         print(f"  dispatched: {len(dispatched)}  "
               f"failed: {len(failed)}  "
-              f"skipped: {len(skipped)}  "
               f"of {len(ids)} candidates")
-        for iid, reason in skipped:
-            print(f"  skipped {iid}: {reason}")
         for iid, rc in failed:
             print(f"  failed {iid}: exit={rc}")
+        if not dispatched and not failed:
+            # All candidates were silently skipped (none belonged to the
+            # agent-team). Treat as empty-queue notification.
+            print(f"  note:  none of the {len(ids)} candidates routed to "
+                  f"team={team}; nothing dispatched.")
         sys.exit(0 if not failed else 1)
 
     # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────

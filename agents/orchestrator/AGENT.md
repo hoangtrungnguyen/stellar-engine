@@ -78,17 +78,45 @@ CLI-driven).
 
 **Batch mode (`--all`).** When the operator wants Phase 0 fired for every
 ready issue on a team in a single repo (not just the next one), add
-`--all --team T`. The deploy command then loops over `pick_ready`'s
-output (capped at `--limit N`, default 100) and dispatches each, skipping
-issues whose route resolves to a different team. Default behaviour is
-continue-on-error: a per-issue failure logs a `failed <id>: exit=N` row
-in the summary but the loop keeps going. Pass `--stop-on-error` to bail
-at the first failure. Exit code is non-zero if any issue failed.
+`--all --team T`. The deploy command loops over `pick_ready`'s output
+(capped at `--limit N`, default 100) and dispatches each.
+
+Two guardrails:
+
+1. **Agent-team gate.** Only the three teams with an `se`-side Phase 0
+   dispatch script — `fix-bug`, `qa`, `task-generator` — are valid
+   `--all` targets. `epic-task` is not an agent-team (it dispatches to
+   the `/ship` slash command, which only runs inside Claude Code).
+   Running `se o deploy --all --team epic-task` prints a "not an
+   agent-team — nothing to do" notice and exits 0. The constant
+   `_AGENT_TEAMS` in `cli/se` is the single source of truth.
+
+2. **Silent skip on team mismatch.** Per-issue, if a picked candidate's
+   route resolves to a different team than `--team T` (rare — would
+   happen if labels changed between `pick_ready` and `route`), the
+   issue is silently skipped: no dispatch fires, no log row, no count
+   bump. "If the issues do not belong to an agent-team, do nothing."
+
+**Empty-queue report.** When `pick_ready` returns zero ready issues for
+a valid agent-team, `--all` emits a structured notification report
+instead of a bare line — repo path, ready-issue count (0), and a hint
+about how to inspect in-flight items (`se o pick`, `grava list`). This
+is the "no issue for an agent-team → make a report and notify the user"
+behaviour. Exit code stays 0.
+
+Default behaviour is continue-on-error: a per-issue failure logs a
+`failed <id>: exit=N` row in the summary but the loop keeps going. Pass
+`--stop-on-error` to bail at the first failure. Exit code is non-zero if
+any issue failed.
 
 `--all` requires `--team T` and is incompatible with an explicit `<id>`.
 Combine with `--dry-run` to preview the dispatch list without firing any
 Phase 0 steps. This is a one-tick batch — it does not respect the daemon
 plan's `max_concurrent` cap (that lives in `se o run`, not yet built).
+
+Single-issue mode (`se o deploy <id>` and `se o deploy --team T` without
+`--all`) is unchanged — it still prints the `/ship` hint for `epic-task`
+issues so operators see what to do next.
 
 A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
