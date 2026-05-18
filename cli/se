@@ -551,6 +551,67 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
     verb = "updated" if existed else "added  "
     print(f"  {verb}  repos.yaml: {args.name} → {repo_path}")
 
+    # ── scaffold systems/<name>/ ───────────────────────────────────────────────
+    systems_dir = base / "systems" / args.name
+    if systems_dir.exists() and not args.force:
+        print(f"  exists   systems/{args.name}/ (skipping scaffold)")
+    else:
+        systems_dir.mkdir(parents=True, exist_ok=True)
+
+        system_yaml = systems_dir / "system.yaml"
+        if not system_yaml.exists() or args.force:
+            plane_id = args.plane_project_id or "REPLACE_WITH_PLANE_PROJECT_UUID"
+            system_yaml.write_text(
+                f"# {args.name} system config for the task-generator agent.\n"
+                f"#\n"
+                f"# Fill in the Plane project UUID and git URL, then run:\n"
+                f"#   se repos add --path {repo_path} --plane-project-id <UUID>\n"
+                f"\n"
+                f"projects:\n"
+                f"  \"{plane_id}\":\n"
+                f"    repo_name: {args.name}\n"
+                f"    git_url: REPLACE_WITH_GIT_URL\n"
+                f"    workspace_prefix: REPLACE_WITH_PREFIX\n"
+                f"\n"
+                f"plane_state_map:\n"
+                f"  \"{plane_id}\":\n"
+                f"    open:        \"Todo\"\n"
+                f"    in_progress: \"In Progress\"\n"
+                f"    closed:      \"Done\"\n"
+            )
+
+        claude_md = systems_dir / "CLAUDE.md"
+        if not claude_md.exists() or args.force:
+            claude_md.write_text(
+                f"# {args.name}\n"
+                f"\n"
+                f"## System type\n"
+                f"\n"
+                f"**Type:** support\n"
+                f"\n"
+                f"---\n"
+                f"\n"
+                f"## Plane project\n"
+                f"\n"
+                f"**Project:** {args.name} | **UUID:** `{args.plane_project_id or 'REPLACE_WITH_UUID'}`\n"
+                f"\n"
+                f"---\n"
+                f"\n"
+                f"## Repo\n"
+                f"\n"
+                f"Path: `{repo_path}`\n"
+                f"\n"
+                f"---\n"
+                f"\n"
+                f"## Notes\n"
+                f"\n"
+                f"<!-- Add tech stack, architectural rules, and doc map here. -->\n"
+            )
+
+        print(f"  created  systems/{args.name}/")
+        print(f"  created  systems/{args.name}/system.yaml")
+        print(f"  created  systems/{args.name}/CLAUDE.md")
+
     if hook_status and any(s.lstrip().startswith(("created", "updated"))
                            for s in hook_status):
         print(
