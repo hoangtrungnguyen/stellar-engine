@@ -34,14 +34,14 @@ def wisp_write(issue_id: str, key: str, value: str, cwd: str) -> None:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("id", help="Grava bug issue ID")
     parser.add_argument("--target-repo", default=".")
     parser.add_argument("--actor", default="fix-bug-pr-creator")
     parser.add_argument("--title", default=None)
     parser.add_argument("--draft", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
     worktree = os.path.join(cwd, ".worktree", args.id)
@@ -66,7 +66,7 @@ def main() -> None:
         pr_number = wisp_read(args.id, "pr_number", cwd)
         print(f"PR already created: {pr_url}")
         print(json.dumps({"id": args.id, "pr_url": pr_url, "pr_number": pr_number, "idempotent": True}))
-        sys.exit(0)
+        return 0
 
     # 3. Optional pre-merge check script
     check_script = os.path.join(cwd, "scripts", "pre-merge-check.sh")
@@ -166,7 +166,8 @@ def main() -> None:
     )
 
     print(json.dumps({"id": args.id, "pr_url": pr_url, "pr_number": pr_number}))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

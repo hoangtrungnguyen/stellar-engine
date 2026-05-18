@@ -37,12 +37,12 @@ def wisp_write(issue_id: str, key: str, value: str, cwd: str) -> None:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("id", help="Grava bug issue ID")
     parser.add_argument("--target-repo", default=".")
     parser.add_argument("--actor", default="fix-bug-orchestrator")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
 
@@ -80,7 +80,7 @@ def main() -> None:
         wisp_write(args.id, "orchestrator_heartbeat", str(int(time.time())), cwd)
         print(f"Already in pipeline (pipeline_phase={phase}). Heartbeat updated.")
         print(json.dumps({"id": args.id, "worktree": worktree, "branch": branch, "idempotent": True}))
-        sys.exit(0)
+        return 0
 
     # 3. Claim (provisions .worktree/<id>/ on branch grava/<id>)
     claim_r = subprocess.run(
@@ -107,7 +107,8 @@ def main() -> None:
     )
 
     print(json.dumps({"id": args.id, "worktree": worktree, "branch": branch}))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

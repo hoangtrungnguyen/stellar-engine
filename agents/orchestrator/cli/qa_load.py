@@ -57,14 +57,14 @@ def wisp_write(issue_id: str, key: str, value: str, cwd: str) -> None:
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("id", help="Grava issue ID")
     parser.add_argument("--target-repo", default=".")
     parser.add_argument("--checklist", default=None)
     parser.add_argument("--type", choices=["cli", "api", "web", "mobile"], default=None)
     parser.add_argument("--out", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
     out_path = args.out or os.path.join(cwd, ".grava", f"qa-{args.id}-checklist.md")
@@ -142,7 +142,8 @@ def main() -> None:
         "source": source,
         "out": out_path,
     }))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -109,13 +109,13 @@ def wisp_read(issue_id: str, key: str, cwd: str) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("epic_id", help="Grava epic issue ID")
     parser.add_argument("--target-repo", default=".")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run task-generator Phase A preview only; skip approval gate")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cwd = args.target_repo
 
@@ -207,8 +207,8 @@ def main() -> None:
         "project_id": project_id,
         "task_gen_exit_code": task_gen_exit,
     }))
-    sys.exit(task_gen_exit)
+    return task_gen_exit
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

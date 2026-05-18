@@ -15,11 +15,11 @@ import subprocess
 import sys
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Route a grava issue to the correct team.")
     parser.add_argument("id", help="Grava issue ID")
     parser.add_argument("--target-repo", default=".", help="Path to grava-initialised repo")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Fetch issue
     r = subprocess.run(
@@ -60,7 +60,8 @@ def main() -> None:
     )
 
     print(json.dumps({"id": args.id, "team": team, "type": issue_type, "labels": labels}))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

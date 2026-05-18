@@ -1131,6 +1131,248 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
     sys.exit(mod.main(argv))
 
 
+# ── se orchestrator ───────────────────────────────────────────────────────────
+#
+# Thin wrappers around agents/orchestrator/cli/*.py.  Each script's main()
+# was refactored to accept argv: list[str] | None for in-process dispatch
+# (same pattern as cmd_taskgen / cmd_plane_sync, PyInstaller-friendly).
+#
+# Subcommand tree:
+#   se orchestrator route       <id>
+#   se orchestrator pick        --team {fix-bug|epic-task|qa|task-generator}
+#   se orchestrator doctor
+#   se orchestrator expand      <epic-id>          # task-generator delegate
+#   se orchestrator fix-bug claim   <id>
+#   se orchestrator fix-bug verify  <id>
+#   se orchestrator fix-bug pr      <id>
+#   se orchestrator qa load     <id> [--type ...]
+#   se orchestrator qa report   <id> --results-file ...
+#   se orchestrator deploy      [<id>] [--team T]  # route + Phase 0 entry
+#
+# `deploy` is the operator's "start orchestrator" entry: routes a single
+# issue (or auto-picks one) and kicks off the team's Phase 0 step.
+# Multi-phase pipelines (fix-bug, QA) still need human-in-loop between
+# phases — `deploy` only fires the first step.
+
+
+_ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
+
+
+def _orch_script(name: str) -> Path:
+    """Resolve agents/orchestrator/cli/<name>.py inside the bundle / source tree."""
+    return _repo_root().joinpath(*_ORCH_SCRIPT_DIR, name)
+
+
+def _orch_invoke(script_name: str, mod_name: str, argv: list[str]) -> int:
+    """Load orch script and call its main(argv)."""
+    script = _orch_script(script_name)
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return 1
+    mod = _load_module(mod_name, script)
+    return mod.main(argv)
+
+
+def _orch_route_argv(issue_id: str, target_repo: str) -> list[str]:
+    return [issue_id, "--target-repo", target_repo]
+
+
+def _orch_pick_argv(team: str, target_repo: str, limit: int) -> list[str]:
+    return ["--team", team, "--target-repo", target_repo, "--limit", str(limit)]
+
+
+def cmd_orchestrator_route(args: argparse.Namespace) -> None:
+    sys.exit(_orch_invoke(
+        "route.py", "orch_route",
+        _orch_route_argv(args.id, args.target_repo),
+    ))
+
+
+def cmd_orchestrator_pick(args: argparse.Namespace) -> None:
+    sys.exit(_orch_invoke(
+        "pick_ready.py", "orch_pick_ready",
+        _orch_pick_argv(args.team, args.target_repo, args.limit),
+    ))
+
+
+def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
+    argv = ["--target-repo", args.target_repo]
+    if args.json:
+        argv.append("--json")
+    sys.exit(_orch_invoke("doctor.py", "orch_doctor", argv))
+
+
+def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
+    argv = [args.epic_id, "--target-repo", args.target_repo]
+    if args.dry_run:
+        argv.append("--dry-run")
+    sys.exit(_orch_invoke("task_gen_expand.py", "orch_task_gen_expand", argv))
+
+
+def cmd_orchestrator_fix_bug_claim(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    sys.exit(_orch_invoke("fix_bug_claim.py", "orch_fix_bug_claim", argv))
+
+
+def cmd_orchestrator_fix_bug_verify(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.skip_verify:
+        argv.append("--skip-verify")
+    if args.actor:
+        argv += ["--actor", args.actor]
+    if args.state_file:
+        argv += ["--state-file", args.state_file]
+    sys.exit(_orch_invoke("fix_bug_verify.py", "orch_fix_bug_verify", argv))
+
+
+def cmd_orchestrator_fix_bug_pr(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    if args.title:
+        argv += ["--title", args.title]
+    if args.draft:
+        argv.append("--draft")
+    sys.exit(_orch_invoke("fix_bug_pr.py", "orch_fix_bug_pr", argv))
+
+
+def cmd_orchestrator_qa_load(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.checklist:
+        argv += ["--checklist", args.checklist]
+    if args.type:
+        argv += ["--type", args.type]
+    if args.out:
+        argv += ["--out", args.out]
+    sys.exit(_orch_invoke("qa_load.py", "orch_qa_load", argv))
+
+
+def cmd_orchestrator_qa_report(args: argparse.Namespace) -> None:
+    argv = [args.id, "--results-file", args.results_file,
+            "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    sys.exit(_orch_invoke("qa_report.py", "orch_qa_report", argv))
+
+
+def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
+    """Composite: route (or pick) → Phase 0 entry for the resolved team.
+
+    - With <id>: route the issue, then fire the team's Phase 0 step.
+    - Without <id>: pick next ready item for --team (or scan all teams),
+      then route + dispatch.
+
+    Multi-phase pipelines (fix-bug, QA) only get Phase 0 here. Operator
+    drives subsequent phases (verify, pr, report) manually with
+    `se orchestrator fix-bug verify|pr` / `se orchestrator qa report`.
+    """
+    target_repo = args.target_repo
+
+    # 1. Resolve issue_id
+    issue_id = args.id
+    if not issue_id:
+        # Auto-pick
+        teams = [args.team] if args.team else [
+            "fix-bug", "epic-task", "qa", "task-generator",
+        ]
+        for team in teams:
+            # Run pick_ready in subprocess so we can capture stdout
+            # (pick_ready.main writes JSON to stdout).
+            script = _orch_script("pick_ready.py")
+            if not script.exists():
+                print(f"ERROR: {script} not found", file=sys.stderr)
+                sys.exit(1)
+            r = subprocess.run(
+                [sys.executable, str(script),
+                 "--team", team, "--target-repo", target_repo, "--limit", "1"],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                print(f"pick_ready({team}) failed: {r.stderr.strip()}", file=sys.stderr)
+                continue
+            try:
+                items = json.loads(r.stdout or "[]")
+            except json.JSONDecodeError:
+                items = []
+            if items:
+                issue_id = items[0].get("id", "")
+                if issue_id:
+                    print(f"Auto-picked from team={team}: {issue_id}")
+                    break
+        if not issue_id:
+            print(
+                f"No ready issues found for "
+                f"{'team='+args.team if args.team else 'any team'} in {target_repo}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # 2. Route — same in-process invoke; we need the team back, so subprocess
+    #    to capture JSON.
+    route_script = _orch_script("route.py")
+    if not route_script.exists():
+        print(f"ERROR: {route_script} not found", file=sys.stderr)
+        sys.exit(1)
+    r = subprocess.run(
+        [sys.executable, str(route_script), issue_id, "--target-repo", target_repo],
+        capture_output=True, text=True,
+    )
+    print(r.stdout, end="")
+    if r.stderr:
+        print(r.stderr, end="", file=sys.stderr)
+    if r.returncode != 0:
+        sys.exit(r.returncode)
+    try:
+        route_info = json.loads(r.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError):
+        print("ERROR: could not parse route.py output", file=sys.stderr)
+        sys.exit(2)
+
+    team = route_info.get("team", "")
+    if args.team and args.team != team:
+        print(
+            f"WARNING: --team={args.team} but routing classified {issue_id} as "
+            f"{team}. Using {team}.",
+            file=sys.stderr,
+        )
+    if args.dry_run:
+        print(f"[dry-run] Would dispatch {issue_id} to team={team} Phase 0.")
+        sys.exit(0)
+
+    # 3. Dispatch Phase 0 for resolved team
+    print(f"\n→ Dispatching {issue_id} to team={team} (Phase 0)")
+    if team == "fix-bug":
+        sys.exit(_orch_invoke(
+            "fix_bug_claim.py", "orch_fix_bug_claim",
+            [issue_id, "--target-repo", target_repo],
+        ))
+    elif team == "qa":
+        sys.exit(_orch_invoke(
+            "qa_load.py", "orch_qa_load",
+            [issue_id, "--target-repo", target_repo],
+        ))
+    elif team == "task-generator":
+        sys.exit(_orch_invoke(
+            "task_gen_expand.py", "orch_task_gen_expand",
+            [issue_id, "--target-repo", target_repo],
+        ))
+    elif team == "epic-task":
+        print(
+            f"Team 'epic-task' (task/story/subtask) currently runs via the "
+            f"/ship slash command in Claude Code — no `se` equivalent yet.\n"
+            f"Run inside the target repo:\n"
+            f"  claude\n"
+            f"  /ship {issue_id}",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+    else:
+        print(f"ERROR: unknown team '{team}'", file=sys.stderr)
+        sys.exit(1)
+
+
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
 
@@ -1294,7 +1536,134 @@ def main() -> None:
                             "both: pull then push."
                         ))
 
+    # ── se orchestrator ───────────────────────────────────────────────────────
+    p_orch = sub.add_parser(
+        "orchestrator",
+        help="Route + dispatch grava issues to fix-bug / qa / task-generator teams",
+    )
+    orch_sub = p_orch.add_subparsers(dest="orch_cmd", metavar="ACTION")
+    orch_sub.required = True
+
+    # se orchestrator route <id>
+    p_orch_route = orch_sub.add_parser("route", help="Classify an issue's team")
+    p_orch_route.add_argument("id", help="Grava issue ID")
+    p_orch_route.add_argument("--target-repo", default=".", metavar="PATH")
+
+    # se orchestrator pick --team T
+    p_orch_pick = orch_sub.add_parser("pick", help="Next ready issue for a team")
+    p_orch_pick.add_argument(
+        "--team", required=True,
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+    )
+    p_orch_pick.add_argument("--limit", type=int, default=1)
+    p_orch_pick.add_argument("--target-repo", default=".", metavar="PATH")
+
+    # se orchestrator doctor
+    p_orch_doc = orch_sub.add_parser(
+        "doctor",
+        help="Verify env for orchestrator sub-pipelines + grava→Plane sync",
+    )
+    p_orch_doc.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_doc.add_argument("--json", action="store_true")
+
+    # se orchestrator expand <epic-id>
+    p_orch_exp = orch_sub.add_parser(
+        "expand",
+        help="Resolve a grava epic's Plane page and delegate to task-generator",
+    )
+    p_orch_exp.add_argument("epic_id", help="Grava epic issue ID")
+    p_orch_exp.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_exp.add_argument("--dry-run", action="store_true",
+                            help="task-generator Phase A preview only")
+
+    # se orchestrator deploy [<id>] [--team T]
+    p_orch_dep = orch_sub.add_parser(
+        "deploy",
+        help="Route + fire Phase 0 for an issue (auto-picks if <id> omitted)",
+    )
+    p_orch_dep.add_argument("id", nargs="?", default=None,
+                            help="Grava issue ID. Omit to auto-pick.")
+    p_orch_dep.add_argument(
+        "--team", default=None,
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+        help="Filter for auto-pick. Ignored when <id> is given (route decides).",
+    )
+    p_orch_dep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_dep.add_argument("--dry-run", action="store_true",
+                            help="Route only — do not fire Phase 0")
+
+    # se orchestrator fix-bug {claim,verify,pr}
+    p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")
+    fb_sub = p_orch_fb.add_subparsers(dest="fb_cmd", metavar="PHASE")
+    fb_sub.required = True
+
+    p_fb_claim = fb_sub.add_parser("claim", help="Phase 0: claim bug + provision worktree")
+    p_fb_claim.add_argument("id", help="Grava bug issue ID")
+    p_fb_claim.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_claim.add_argument("--actor", default=None)
+
+    p_fb_ver = fb_sub.add_parser("verify", help="Phase 2: self-verify (tests/lint/build)")
+    p_fb_ver.add_argument("id", help="Grava bug issue ID")
+    p_fb_ver.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_ver.add_argument("--skip-verify", action="store_true",
+                          help="Force PASS verdict without running checks")
+    p_fb_ver.add_argument("--actor", default=None)
+    p_fb_ver.add_argument("--state-file", default=None, metavar="PATH")
+
+    p_fb_pr = fb_sub.add_parser("pr", help="Phase 3: push branch + open PR")
+    p_fb_pr.add_argument("id", help="Grava bug issue ID")
+    p_fb_pr.add_argument("--target-repo", default=".", metavar="PATH")
+    p_fb_pr.add_argument("--actor", default=None)
+    p_fb_pr.add_argument("--title", default=None)
+    p_fb_pr.add_argument("--draft", action="store_true")
+
+    # se orchestrator qa {load,report}
+    p_orch_qa = orch_sub.add_parser("qa", help="QA pipeline phases")
+    qa_sub = p_orch_qa.add_subparsers(dest="qa_cmd", metavar="PHASE")
+    qa_sub.required = True
+
+    p_qa_load = qa_sub.add_parser("load", help="Phase 0: resolve + stage checklist")
+    p_qa_load.add_argument("id", help="Grava issue ID")
+    p_qa_load.add_argument("--target-repo", default=".", metavar="PATH")
+    p_qa_load.add_argument("--checklist", default=None, metavar="PATH")
+    p_qa_load.add_argument("--type", default=None,
+                           choices=("cli", "api", "web", "mobile"))
+    p_qa_load.add_argument("--out", default=None, metavar="PATH")
+
+    p_qa_rep = qa_sub.add_parser("report", help="Phase 2: render + post QA report")
+    p_qa_rep.add_argument("id", help="Grava issue ID")
+    p_qa_rep.add_argument("--results-file", required=True, metavar="PATH")
+    p_qa_rep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_qa_rep.add_argument("--actor", default=None)
+
     args = parser.parse_args()
+
+    # Two-level dispatch for `orchestrator <sub>`
+    if args.cmd == "orchestrator":
+        orch_table = {
+            "route":  cmd_orchestrator_route,
+            "pick":   cmd_orchestrator_pick,
+            "doctor": cmd_orchestrator_doctor,
+            "expand": cmd_orchestrator_expand,
+            "deploy": cmd_orchestrator_deploy,
+        }
+        if args.orch_cmd in orch_table:
+            orch_table[args.orch_cmd](args)
+            return
+        if args.orch_cmd == "fix-bug":
+            {
+                "claim":  cmd_orchestrator_fix_bug_claim,
+                "verify": cmd_orchestrator_fix_bug_verify,
+                "pr":     cmd_orchestrator_fix_bug_pr,
+            }[args.fb_cmd](args)
+            return
+        if args.orch_cmd == "qa":
+            {
+                "load":   cmd_orchestrator_qa_load,
+                "report": cmd_orchestrator_qa_report,
+            }[args.qa_cmd](args)
+            return
+
     {
         "init": cmd_init,
         "repos": cmd_repos,
