@@ -462,6 +462,9 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
     base = Path(args.dir).resolve()
     repos = _load_repos(base)
 
+    if not args.name:
+        args.name = Path(args.path).expanduser().resolve().name
+
     existed = args.name in repos
     if existed and not args.force:
         print(
@@ -967,7 +970,8 @@ def main() -> None:
         "add",
         help="Register a new repo (runs `grava init` in <path> if .grava/ missing)",
     )
-    p_repos_add.add_argument("name", help="Logical repo name (registry key)")
+    p_repos_add.add_argument("name", nargs="?", default=None,
+                             help="Logical repo name (registry key); defaults to the folder name of --path")
     p_repos_add.add_argument("--path", required=True, metavar="PATH",
                              help="Path to the repo's working tree (absolute or ~-expandable)")
     p_repos_add.add_argument("--max-concurrent", type=int, default=2, metavar="N",
