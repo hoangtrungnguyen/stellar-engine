@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## System type
 
-**Type:** main — this is the company's primary system. The root `repo-map.yaml` and root Plane configuration point here. All `se` commands default to this system; no `--system` flag required.
+**Type:** main (TEST) — this folder is a reference/example only. It is not a real production system. Use it as a template when scaffolding a new system under `systems/`.
 
 ---
 

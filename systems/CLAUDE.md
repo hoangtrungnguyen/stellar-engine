@@ -27,7 +27,7 @@ Each `<SystemName>` folder is an independent product or platform. Each `<project
 
 | System | Type | Folder | Plane identifier | Notes |
 |---|---|---|---|---|
-| SportBuddies | main | `SportBuddies/` | `SPACE` | Sports court booking marketplace, Ho Chi Minh City (Sai Gon) |
+| SportBuddies | main | `SportBuddies/` | `SPACE` | **TEST** — example/reference folder only; not a real production system |
 
 ## Conventions
 
