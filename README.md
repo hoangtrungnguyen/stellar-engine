@@ -2,9 +2,7 @@
 
 Operator toolkit on top of [grava](https://github.com/) + [Plane.so](https://plane.so/). Three sub-agents (generator, task-generator, orchestrator) plus a v0 grava→Plane state sync, all driven by the single `se` CLI.
 
-## Install (macOS)
-
-Linux support is not yet built — macOS only for now.
+## Install
 
 ```bash
 curl -sL https://raw.githubusercontent.com/hoangtrungnguyen/stellar-engine/main/scripts/install.sh | bash
@@ -41,6 +39,8 @@ Grab the tarball for your platform from [Releases](https://github.com/hoangtrung
 |---|---|
 | macOS Apple Silicon | `se-darwin-arm64.tar.gz` |
 | macOS Intel | `se-darwin-x64.tar.gz` |
+| Linux x86_64 | `se-linux-x64.tar.gz` |
+| Linux ARM64 | `se-linux-arm64.tar.gz` |
 
 ```bash
 tar -xzf se-darwin-arm64.tar.gz
