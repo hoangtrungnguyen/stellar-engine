@@ -147,8 +147,13 @@ PLANE_HOST=https://api.plane.so
 # Create in Plane → Settings → API tokens
 PLANE_API_TOKEN=plane_api_REPLACE_ME
 
-# ── Stellar engine home (for grava agent hooks calling grava_plane_sync.py) ──
-STELLAR_ENGINE_HOME=/absolute/path/to/stellar-engine
+# ── Stellar engine home (source install only) ───────────────────────────────
+# Only needed if you cloned stellar-engine from git AND your target repo's
+# grava agent hooks call `python3 $STELLAR_ENGINE_HOME/.../grava_plane_sync.py`
+# directly. Binary installs (curl | bash) leave this UNSET — the hook shim
+# written by `se repos add --plane-project-id <UUID>` will prefer the `se`
+# binary on PATH instead.
+# STELLAR_ENGINE_HOME=/absolute/path/to/stellar-engine
 
 # ── Anthropic (generator LLM step, Phase D — deferred today) ─────────────────
 # Required only when the generator's outline step is invoked via the SDK.
@@ -181,13 +186,27 @@ To make the values persist across shells, source `.env` from your shell rc
 
 ## What each variable does
 
-| Var | Required for | Where to get it |
-|-----|--------------|-----------------|
-| `PLANE_WORKSPACE` | Every `se` command that touches Plane | Slug in your Plane URL |
-| `PLANE_HOST` | Same | `https://api.plane.so` for hosted, or your self-host URL |
-| `PLANE_API_TOKEN` | Same | Plane → Settings → API tokens → Create |
-| `STELLAR_ENGINE_HOME` | `grava signal` hooks invoking `grava_plane_sync.py` | Absolute path to your `stellar-engine` checkout |
-| `ANTHROPIC_API_KEY` | Generator Phase D (deferred) | <https://console.anthropic.com/> → API Keys |
+| Var | Required for | Install mode | Where to get it |
+|-----|--------------|--------------|-----------------|
+| `PLANE_WORKSPACE` | Every `se` command that touches Plane | both | Slug in your Plane URL |
+| `PLANE_HOST` | Same | both | `https://api.plane.so` for hosted, or your self-host URL |
+| `PLANE_API_TOKEN` | Same | both | Plane → Settings → API tokens → Create |
+| `STELLAR_ENGINE_HOME` | `grava signal` hooks calling `grava_plane_sync.py` directly | **source only** | Absolute path to your `stellar-engine` checkout |
+| `ANTHROPIC_API_KEY` | Generator Phase D (deferred) | both | <https://console.anthropic.com/> → API Keys |
+
+## Install modes
+
+`se` ships in two flavors. The Plane-sync wiring differs slightly between
+them — pick the row that matches how you installed `se`:
+
+| Install mode | How you got it | Hook wiring |
+|--------------|----------------|-------------|
+| **Binary** | `curl -sL .../install.sh \\| bash` → `se` on PATH | Run `se repos add --plane-project-id <UUID>`. The auto-generated `<target-repo>/.grava/hooks/plane-sync.sh` shim calls `se plane-sync` — the bundled binary locates its own data, no `STELLAR_ENGINE_HOME` needed. |
+| **Source** | `git clone` + `bash scripts/build.sh` (or `python3 cli/se`) | Same `se repos add --plane-project-id <UUID>` flow — the shim falls back to `python3 $STELLAR_ENGINE_HOME/.../grava_plane_sync.py` when `se` is not on PATH. Set `STELLAR_ENGINE_HOME` in your shell profile. |
+
+In both modes the shim is non-fatal (`\\|\\| true`) — if neither `se` nor
+`STELLAR_ENGINE_HOME` resolves, it logs a warning and exits 0 so the agent
+loop never breaks.
 
 ## Verify
 
