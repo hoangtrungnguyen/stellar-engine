@@ -67,13 +67,14 @@ python3 cli/se taskgen <project_id> <page_id> --yes        # writes Plane + Grav
 # (equivalent: python3 agents/task-generator/cli/run.py <project_id> <page_id> --yes)
 
 # Orchestrator: route + dispatch grava issues to teams
-python3 cli/se orchestrator route <issue_id> --target-repo <path>
-python3 cli/se orchestrator pick --team fix-bug --target-repo <path>
-python3 cli/se orchestrator deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0
-python3 cli/se orchestrator expand <epic-id> --target-repo <path>          # epic → task-generator
-python3 cli/se orchestrator fix-bug claim|verify|pr <id> --target-repo <path>
-python3 cli/se orchestrator qa load|report <id> --target-repo <path>
-python3 cli/se orchestrator doctor --target-repo <path>
+# `se o` is a shorthand alias for `se orchestrator` — both forms work identically.
+python3 cli/se o route <issue_id> --target-repo <path>
+python3 cli/se o pick --team fix-bug --target-repo <path>
+python3 cli/se o deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0
+python3 cli/se o expand <epic-id> --target-repo <path>          # epic → task-generator
+python3 cli/se o fix-bug claim|verify|pr <id> --target-repo <path>
+python3 cli/se o qa load|report <id> --target-repo <path>
+python3 cli/se o doctor --target-repo <path>
 # (or the raw script: python3 agents/orchestrator/cli/{route,pick_ready,...}.py)
 
 # Sync local markdown to Plane
@@ -129,7 +130,7 @@ python3 upload_wiki_page.py docs/notes.md
 
 ## What this repo is NOT
 
-- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`, `taskgen`, `plane-sync`, and `orchestrator` (one-shot route/pick/deploy/expand + fix-bug + qa phase wrappers). See [`docs/orchestrator/daemon-plan.md`](docs/orchestrator/daemon-plan.md) for the daemon plan.
+- A fleet manager — `stellar-orchestrator` (continuous-loop fleet runtime) is planned, not built. The `cli/se` operator CLI ships today with `init`, `repos`, `doctor`, `download`, `generate`, `taskgen`, `plane-sync`, and `orchestrator` / `o` (one-shot route/pick/deploy/expand + fix-bug + qa phase wrappers; `se o` is the shorthand alias). See [`docs/orchestrator/daemon-plan.md`](docs/orchestrator/daemon-plan.md) for the daemon plan.
 - A general task runner — scope is `grava` + `Plane` + `/ship` only.
 - A grava replacement — operates on grava via `--target-repo` flag; never modifies grava's data model except through wisps.
 - An LLM-driven spec writer — the Generator agent's outline step (Phase D) is deferred; today the operator hand-writes `outline.json` via a Claude Code session. The agent never calls the Anthropic API directly until Phase D ships.

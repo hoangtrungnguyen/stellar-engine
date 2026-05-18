@@ -40,28 +40,30 @@ Orchestrator routing
 /qa <id> [--checklist <path>] [--type cli|api|web|mobile] [--batch <label>]
 ```
 
-### CLI entry (`se orchestrator`)
+### CLI entry (`se orchestrator`, alias `se o`)
 
 For operator use outside Claude Code, `cli/se` wraps the same scripts.
 All sub-commands accept `--target-repo PATH` (defaults to `.`).
+`se o <sub>` is the shorthand alias for `se orchestrator <sub>` — both
+forms accept identical arguments. Examples below use the shorthand.
 
 ```
-se orchestrator route   <id>                        # classify team via grava type/labels
-se orchestrator pick    --team T   [--limit N]      # next ready issue for team T
-se orchestrator doctor                              # env + repo + cron checks
-se orchestrator expand  <epic-id>  [--dry-run]      # epic → task-generator delegate
+se o route   <id>                        # classify team via grava type/labels
+se o pick    --team T   [--limit N]      # next ready issue for team T
+se o doctor                              # env + repo + cron checks
+se o expand  <epic-id>  [--dry-run]      # epic → task-generator delegate
 
 # Composite "start orchestrator" entry — auto-picks if <id> omitted
-se orchestrator deploy  [<id>]     [--team T] [--dry-run]
+se o deploy  [<id>]     [--team T] [--dry-run]
 
 # Fix-bug pipeline phases
-se orchestrator fix-bug claim  <id>                 # Phase 0
-se orchestrator fix-bug verify <id> [--skip-verify] # Phase 2 (tests/lint/build)
-se orchestrator fix-bug pr     <id> [--draft]       # Phase 3 (push + gh pr create)
+se o fix-bug claim  <id>                 # Phase 0
+se o fix-bug verify <id> [--skip-verify] # Phase 2 (tests/lint/build)
+se o fix-bug pr     <id> [--draft]       # Phase 3 (push + gh pr create)
 
 # QA pipeline phases
-se orchestrator qa load   <id> [--checklist P|--type T]   # Phase 0
-se orchestrator qa report <id> --results-file P           # Phase 2
+se o qa load   <id> [--checklist P|--type T]   # Phase 0
+se o qa report <id> --results-file P           # Phase 2
 ```
 
 `deploy` routes the issue, then fires the team's Phase 0 (`fix_bug_claim`,
@@ -71,7 +73,7 @@ Multi-phase pipelines still need operator action between phases (the
 `Fix` / `Review` steps happen in Claude Code; only Phase 0 / 2 / 3 are
 CLI-driven).
 
-A continuous-loop daemon (`se orchestrator run --repo <path>` polling
+A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
 
 ### Flag parsing (order-tolerant)
