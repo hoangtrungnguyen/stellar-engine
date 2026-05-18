@@ -1198,10 +1198,19 @@ _ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
 
 
 # Teams that have a Phase 0 dispatch script (an "agent") and can be looped
-# in `se o deploy --all`. `epic-task` is intentionally absent — it does
-# not have an `se`-side agent today; it dispatches to the `/ship` slash
-# command which only runs inside a Claude Code session.
+# in `se o deploy --all` for real Phase 0 dispatch.
 _AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator")
+
+# Teams that can be looped in `se o deploy --all` but only produce a /ship
+# hint per issue (no `se`-side Phase 0 script — work runs inside Claude Code).
+# Each iteration calls `_orch_dispatch_phase0(epic-task, …)` which prints the
+# hint to stderr. Tracked in a separate `hinted` bucket in the batch summary
+# so the operator can distinguish "actually dispatched" from "needs Claude Code".
+_HINT_ONLY_TEAMS: tuple[str, ...] = ("epic-task",)
+
+# Union: every team `--all --team T` will iterate. Anything outside this
+# tuple is rejected with a "not a valid batch target" message + exit 0.
+_BATCH_TEAMS: tuple[str, ...] = _AGENT_TEAMS + _HINT_ONLY_TEAMS
 
 
 def _add_plane_profile_flags(p: argparse.ArgumentParser) -> None:
@@ -1471,16 +1480,19 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
         team = args.team
 
-        # Guard: only agent-teams (those with a Phase 0 dispatch script)
-        # are valid batch targets. epic-task has no agent — do nothing.
-        if team not in _AGENT_TEAMS:
+        # Guard: only batch-valid teams (agent-teams with a Phase 0 script,
+        # plus hint-only teams that loop and print /ship hints) are allowed.
+        # Anything outside _BATCH_TEAMS is rejected with exit 0.
+        if team not in _BATCH_TEAMS:
             print(
-                f"Team '{team}' is not an agent-team — no Phase 0 dispatch "
-                f"available from `se` (agent-teams: {', '.join(_AGENT_TEAMS)}).\n"
-                f"Nothing to do.",
+                f"Team '{team}' is not a valid batch target — no Phase 0 "
+                f"dispatch or /ship hint loop available from `se` "
+                f"(valid teams: {', '.join(_BATCH_TEAMS)}).\nNothing to do.",
                 file=sys.stderr,
             )
             sys.exit(0)
+
+        hint_only = team in _HINT_ONLY_TEAMS
 
         limit = args.limit or 100
         ids = _orch_pick_ids(team, target_repo, limit)
@@ -1494,17 +1506,28 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             print(f"  hint:   inspect in-flight items with "
                   f"`se o pick --team {team} --target-repo {target_repo}` "
                   f"and `grava list` in the repo.")
-            print(f"  note:   nothing dispatched; no Phase 0 fired.")
+            if hint_only:
+                print(f"  note:   nothing hinted; team={team} loops emit "
+                      f"`/ship <id>` hints but require Claude Code to actually "
+                      f"ship.")
+            else:
+                print(f"  note:   nothing dispatched; no Phase 0 fired.")
             sys.exit(0)
 
-        print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
+        verb = "hint" if hint_only else "dispatch"
+        print(f"Batch {verb}: team={team}, {len(ids)} issue(s) ready "
               f"(limit={limit}).")
         if args.dry_run:
             for iid in ids:
-                print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
+                if hint_only:
+                    print(f"  [dry-run] would print /ship hint for {iid} "
+                          f"(team={team}, runs in Claude Code)")
+                else:
+                    print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
             sys.exit(0)
 
         dispatched: list[str] = []
+        hinted: list[str] = []
         failed: list[tuple[str, int]] = []
 
         for idx, iid in enumerate(ids, start=1):
@@ -1518,10 +1541,24 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
             routed_team = route_info.get("team", "")
             # Silent skip: if the picked issue doesn't actually belong to
-            # the requested agent-team (rare — labels changed since pick_ready
-            # ran), do nothing for it. Per user spec: "if the issues do not
-            # belong to an agent-team, do nothing." No log row, no count.
+            # the requested team (rare — labels changed since pick_ready
+            # ran), do nothing. No log row, no count.
             if routed_team != team:
+                continue
+
+            if hint_only:
+                # _orch_dispatch_phase0 prints the /ship hint for epic-task
+                # and returns 0 — call it for uniform behaviour, but bucket
+                # the result as "hinted" rather than "dispatched" so the
+                # summary clearly distinguishes the two.
+                print(f"→ Hint: {iid} (team={team}, run in Claude Code)")
+                rc = _orch_dispatch_phase0(iid, team, target_repo)
+                if rc == 0:
+                    hinted.append(iid)
+                else:
+                    failed.append((iid, rc))
+                    if args.stop_on_error:
+                        break
                 continue
 
             print(f"→ Dispatching {iid} to team={team} (Phase 0)")
@@ -1535,15 +1572,23 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
         # Batch summary
         print(f"\n── Batch summary (team={team}) ──")
-        print(f"  dispatched: {len(dispatched)}  "
-              f"failed: {len(failed)}  "
-              f"of {len(ids)} candidates")
+        if hint_only:
+            print(f"  hinted:     {len(hinted)}  "
+                  f"failed: {len(failed)}  "
+                  f"of {len(ids)} candidates")
+            if hinted:
+                print(f"  next:       run each in Claude Code:")
+                for iid in hinted:
+                    print(f"                /ship {iid}")
+        else:
+            print(f"  dispatched: {len(dispatched)}  "
+                  f"failed: {len(failed)}  "
+                  f"of {len(ids)} candidates")
         for iid, rc in failed:
             print(f"  failed {iid}: exit={rc}")
-        if not dispatched and not failed:
-            # All candidates were silently skipped (none belonged to the
-            # agent-team). Treat as empty-queue notification.
-            print(f"  note:  none of the {len(ids)} candidates routed to "
+        if not dispatched and not hinted and not failed:
+            # All candidates silently skipped (route mismatch).
+            print(f"  note:       none of the {len(ids)} candidates routed to "
                   f"team={team}; nothing dispatched.")
         sys.exit(0 if not failed else 1)
 

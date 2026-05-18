@@ -83,26 +83,47 @@ ready issue on a team in a single repo (not just the next one), add
 
 Two guardrails:
 
-1. **Agent-team gate.** Only the three teams with an `se`-side Phase 0
-   dispatch script — `fix-bug`, `qa`, `task-generator` — are valid
-   `--all` targets. `epic-task` is not an agent-team (it dispatches to
-   the `/ship` slash command, which only runs inside Claude Code).
-   Running `se o deploy --all --team epic-task` prints a "not an
-   agent-team — nothing to do" notice and exits 0. The constant
-   `_AGENT_TEAMS` in `cli/se` is the single source of truth.
+1. **Batch-team gate.** Four team values are valid for `--all`:
+   - `fix-bug`, `qa`, `task-generator` — **agent-teams**: real Phase 0
+     dispatch via the corresponding script (`fix_bug_claim`, `qa_load`,
+     `task_gen_expand`).
+   - `epic-task` — **hint-only**: no `se`-side dispatch script; the loop
+     iterates every ready story/task and prints a `/ship <id>` hint per
+     issue, then enumerates them again in the summary so the operator
+     can paste each into Claude Code one by one.
+
+   Any team value outside this set is rejected with a "not a valid batch
+   target — nothing to do" message and exit 0. The constants
+   `_AGENT_TEAMS`, `_HINT_ONLY_TEAMS`, and `_BATCH_TEAMS` in `cli/se`
+   are the single source of truth.
 
 2. **Silent skip on team mismatch.** Per-issue, if a picked candidate's
    route resolves to a different team than `--team T` (rare — would
    happen if labels changed between `pick_ready` and `route`), the
    issue is silently skipped: no dispatch fires, no log row, no count
-   bump. "If the issues do not belong to an agent-team, do nothing."
+   bump. "If the issues do not belong to a batch team, do nothing."
 
 **Empty-queue report.** When `pick_ready` returns zero ready issues for
-a valid agent-team, `--all` emits a structured notification report
+a valid batch-team, `--all` emits a structured notification report
 instead of a bare line — repo path, ready-issue count (0), and a hint
-about how to inspect in-flight items (`se o pick`, `grava list`). This
-is the "no issue for an agent-team → make a report and notify the user"
-behaviour. Exit code stays 0.
+about how to inspect in-flight items (`se o pick`, `grava list`). For
+agent-teams the note reads "nothing dispatched; no Phase 0 fired"; for
+hint-only teams (`epic-task`) it reads "nothing hinted; team=epic-task
+loops emit `/ship <id>` hints but require Claude Code to actually ship."
+Exit code stays 0.
+
+**Batch summary** distinguishes the two outcomes:
+
+```
+── Batch summary (team=fix-bug) ──
+  dispatched: 3  failed: 0  of 3 candidates
+
+── Batch summary (team=epic-task) ──
+  hinted:     2  failed: 0  of 2 candidates
+  next:       run each in Claude Code:
+                /ship grava-96c8
+                /ship grava-a9c6
+```
 
 Default behaviour is continue-on-error: a per-issue failure logs a
 `failed <id>: exit=N` row in the summary but the loop keeps going. Pass
