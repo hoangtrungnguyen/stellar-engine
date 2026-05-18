@@ -28,6 +28,12 @@ jobs:
           - target: darwin-x64
             runner: macos-14
             arch: x64
+          - target: linux-x64
+            runner: ubuntu-latest
+            arch: x64
+          - target: linux-arm64
+            runner: ubuntu-latest
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +44,7 @@ jobs:
         # python.org ships a universal2 (arm64 + x86_64) binary, which
         # PyInstaller's --target-arch flag requires for cross-compile from
         # the arm64 macos-14 runner to x86_64.
+        if: runner.os == 'macOS'
         run: |
           PYVER="3.12.7"
           PKG="python-${PYVER}-macos11.pkg"
@@ -119,13 +126,21 @@ jobs:
             dist/se-darwin-arm64.tar.gz.sha256
             dist/se-darwin-x64.tar.gz
             dist/se-darwin-x64.tar.gz.sha256
+            dist/se-linux-x64.tar.gz
+            dist/se-linux-x64.tar.gz.sha256
+            dist/se-linux-arm64.tar.gz
+            dist/se-linux-arm64.tar.gz.sha256
           generate_release_notes: true
           body: |
-            ## Install (macOS)
+            ## Install
 
             ```bash
             curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install.sh \
               | bash -s -- --version ${{ github.ref_name }}
             ```
 
-            Or grab a tarball below for `darwin-arm64` (Apple Silicon) or `darwin-x64` (Intel) and extract `se` onto your PATH.
+            Or grab a tarball below:
+            - **macOS**: `darwin-arm64` (Apple Silicon) or `darwin-x64` (Intel)
+            - **Linux**: `linux-x64` (x86_64) or `linux-arm64` (ARM64)
+
+            Extract `se` onto your PATH.

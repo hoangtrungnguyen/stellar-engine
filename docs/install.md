@@ -7,9 +7,11 @@ The `se` CLI ships as a self-contained binary per OS/arch. End-users `curl | bas
 | OS | Arch | Tarball | Runner used in CI |
 |---|---|---|---|
 | macOS | arm64 (Apple Silicon) | `se-darwin-arm64.tar.gz` | `macos-14` |
-| macOS | x64 (Intel) | `se-darwin-x64.tar.gz` | `macos-13` |
+| macOS | x64 (Intel) | `se-darwin-x64.tar.gz` | `macos-14` |
+| Linux | x64 (x86_64) | `se-linux-x64.tar.gz` | `ubuntu-latest` |
+| Linux | arm64 (ARM64) | `se-linux-arm64.tar.gz` | `ubuntu-latest` |
 
-Linux + Windows are not supported today. The matrix is trivial to extend — see [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+Windows is not supported. The matrix can be extended — see [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 ## What's bundled
 

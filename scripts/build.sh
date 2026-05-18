@@ -64,7 +64,8 @@ EOF
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
     darwin) OS_TAG="darwin" ;;
-    *) echo "unsupported OS: $OS (macOS only for now)" >&2; exit 1 ;;
+    linux)  OS_TAG="linux" ;;
+    *) echo "unsupported OS: $OS" >&2; exit 1 ;;
 esac
 
 HOST_ARCH="$(uname -m)"
@@ -97,8 +98,13 @@ pip install --quiet --upgrade pip
 # pip would resolve arm64 by default. `--platform` forces wheel selection.
 if [ "$HOST_ARCH" != "$PYI_ARCH" ] && [ "$PYI_ARCH" = "x86_64" ]; then
     pip install --quiet pyinstaller
+    if [ "$OS_TAG" = "darwin" ]; then
+        PLATFORM="macosx_10_9_x86_64"
+    else
+        PLATFORM="manylinux_2_17_x86_64.manylinux2014_x86_64"
+    fi
     pip install --quiet \
-        --platform macosx_10_9_x86_64 \
+        --platform "$PLATFORM" \
         --only-binary=:all: \
         --target "$VENV/lib/cross-x86_64" \
         pyyaml markdown markdownify requests
@@ -143,15 +149,13 @@ pyinstaller \
 
 # ── smoke test ────────────────────────────────────────────────────────────────
 BIN="$REPO_ROOT/dist/$NAME/se"
-# Only smoke-test natively. A cross-built x86_64 binary on Apple Silicon
-# needs Rosetta 2 — present on GH `macos-14` runners but skip the test
-# rather than depend on it.
-if [ "$HOST_ARCH" = "$PYI_ARCH" ] || \
-   ([ "$HOST_ARCH" = "arm64" ] && [ "$PYI_ARCH" = "x86_64" ] && command -v arch >/dev/null && arch -x86_64 true 2>/dev/null); then
+# Only smoke-test natively. Cross-compiled binaries (arm64 host → x86_64 target
+# on macOS, or vice versa on Linux) typically can't run without emulation.
+if [ "$HOST_ARCH" = "$PYI_ARCH" ]; then
     "$BIN" --help >/dev/null
     echo "✓ binary runs: $BIN"
 else
-    echo "⚠ skipping smoke test (cross-build, no Rosetta): $BIN"
+    echo "⚠ skipping smoke test (cross-build): $BIN"
 fi
 
 # ── package ───────────────────────────────────────────────────────────────────
@@ -159,7 +163,11 @@ fi
 echo "✓ tarball:    $REPO_ROOT/dist/$NAME.tar.gz"
 
 # ── checksum ──────────────────────────────────────────────────────────────────
-( cd "$REPO_ROOT/dist" && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
+if command -v shasum >/dev/null; then
+    ( cd "$REPO_ROOT/dist" && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
+else
+    ( cd "$REPO_ROOT/dist" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
+fi
 echo "✓ sha256:     $(cat "$REPO_ROOT/dist/$NAME.tar.gz.sha256")"
 
 deactivate

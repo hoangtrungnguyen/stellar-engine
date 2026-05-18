@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stellar Engine installer (macOS only for now).
+# Stellar Engine installer (macOS + Linux).
 #
 # Single-command install:
 #   curl -sL https://raw.githubusercontent.com/hoangtrungnguyen/stellar-engine/main/scripts/install.sh | bash
@@ -48,7 +48,8 @@ fi
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
     darwin) OS_TAG="darwin" ;;
-    *) echo "✗ unsupported OS: $OS (macOS only for now)" >&2; exit 1 ;;
+    linux)  OS_TAG="linux" ;;
+    *) echo "✗ unsupported OS: $OS" >&2; exit 1 ;;
 esac
 
 ARCH="$(uname -m)"
