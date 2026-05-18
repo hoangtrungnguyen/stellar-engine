@@ -1,0 +1,16 @@
+# se-sandbox system config for the task-generator agent.
+#
+# Fill in the Plane project UUID and git URL, then run:
+#   se repos add --path /home/htnguyen/Space/se-sandbox --plane-project-id <UUID>
+
+projects:
+  "REPLACE_WITH_PLANE_PROJECT_UUID":
+    repo_name: se-sandbox
+    git_url: REPLACE_WITH_GIT_URL
+    workspace_prefix: REPLACE_WITH_PREFIX
+
+plane_state_map:
+  "REPLACE_WITH_PLANE_PROJECT_UUID":
+    open:        "Todo"
+    in_progress: "In Progress"
+    closed:      "Done"

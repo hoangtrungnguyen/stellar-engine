@@ -1,1 +1,10 @@
-repos: {}
+# repos.yaml — fleet runtime registry (keyed by repo name)
+# Distinct from repo-map.yaml (Plane UUID → repo, used by task-generator).
+# See: docs/stellar-engine/strategy.md §D4
+
+repos:
+  se-sandbox:
+    path: /home/htnguyen/Space/se-sandbox
+    max_concurrent: 2
+    priority_threshold: medium
+    poll_interval: 60
