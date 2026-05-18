@@ -4,6 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## System type
+
+**Type:** main — this is the company's primary system. The root `repo-map.yaml` and root Plane configuration point here. All `se` commands default to this system; no `--system` flag required.
+
+---
+
 ## Plane project
 
 **Project:** SportBuddies | **Identifier:** `SPACE` | **UUID:** `fa573b36-9bd4-4c32-8f5f-d575039e97aa`

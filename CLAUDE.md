@@ -103,6 +103,7 @@ python3 upload_wiki_page.py docs/notes.md
 - **Approval per turn for destructive Plane / Grava writes.** task-generator's three phases each require operator approval in the current Claude turn — "yes earlier today" does not count.
 - **Two registries, distinct purposes.** `repo-map.yaml` is for task-generator (UUID → repo). A future `repos.yaml` will hold fleet-runtime config (repo name → poll interval, concurrency, etc.). Do not merge them.
 - **task-generator never writes Plane `state`.** That field is owned by `grava_plane_sync.py` only.
+- **Main system vs support systems.** The company has one designated **main system** (primary codebase) and one or more **support systems** (external integrations). The root `repo-map.yaml` and root Plane configuration belong to the main system. All `se` commands default to the main system — support systems must be targeted explicitly via their own `system.yaml`. See [`systems/CLAUDE.md`](systems/CLAUDE.md) for the systems index and conventions.
 
 ## Key documents
 
