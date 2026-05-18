@@ -90,9 +90,15 @@ def main(argv: list[str] | None = None) -> int:
                     break
 
     else:
-        # All other teams use grava ready
+        # All other teams use grava ready.
+        # `grava ready` caps at limit=20 by default, so push a high upstream
+        # limit and then trim post-filter (some items will fail the team's
+        # type filter or in-flight check and be skipped). 10x headroom is
+        # sufficient for any plausible team backlog; if more is needed the
+        # operator should call pick repeatedly.
+        upstream_limit = max(args.limit * 10, 200)
         r = subprocess.run(
-            ["grava", "ready", "--json"],
+            ["grava", "ready", "--json", "--limit", str(upstream_limit)],
             capture_output=True, text=True, cwd=cwd,
         )
         if r.returncode != 0:
