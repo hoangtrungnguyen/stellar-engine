@@ -75,7 +75,8 @@ se taskgen <project-uuid> <page-uuid> --yes   # Plane page → Plane issues + Gr
 se o doctor --target-repo <repo>              # verify env for sub-pipelines
 se o pick --team fix-bug --target-repo <repo>          # next ready bug
 se o route <issue-id> --target-repo <repo>             # classify team
-se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0
+se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0 (single issue)
+se o deploy --all --team T --target-repo <repo>        # batch: Phase 0 for every ready issue
 se o expand <epic-id> --target-repo <repo>             # epic → task-generator
 ```
 

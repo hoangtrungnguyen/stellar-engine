@@ -56,6 +56,9 @@ se o expand  <epic-id>  [--dry-run]      # epic → task-generator delegate
 # Composite "start orchestrator" entry — auto-picks if <id> omitted
 se o deploy  [<id>]     [--team T] [--dry-run]
 
+# Batch loop: fire Phase 0 for EVERY ready issue on a team in this repo
+se o deploy --all --team T [--limit N] [--dry-run] [--stop-on-error]
+
 # Fix-bug pipeline phases
 se o fix-bug claim  <id>                 # Phase 0
 se o fix-bug verify <id> [--skip-verify] # Phase 2 (tests/lint/build)
@@ -72,6 +75,20 @@ a hint to run `/ship <id>` inside Claude Code — no `se` equivalent yet.
 Multi-phase pipelines still need operator action between phases (the
 `Fix` / `Review` steps happen in Claude Code; only Phase 0 / 2 / 3 are
 CLI-driven).
+
+**Batch mode (`--all`).** When the operator wants Phase 0 fired for every
+ready issue on a team in a single repo (not just the next one), add
+`--all --team T`. The deploy command then loops over `pick_ready`'s
+output (capped at `--limit N`, default 100) and dispatches each, skipping
+issues whose route resolves to a different team. Default behaviour is
+continue-on-error: a per-issue failure logs a `failed <id>: exit=N` row
+in the summary but the loop keeps going. Pass `--stop-on-error` to bail
+at the first failure. Exit code is non-zero if any issue failed.
+
+`--all` requires `--team T` and is incompatible with an explicit `<id>`.
+Combine with `--dry-run` to preview the dispatch list without firing any
+Phase 0 steps. This is a one-tick batch — it does not respect the daemon
+plan's `max_concurrent` cap (that lives in `se o run`, not yet built).
 
 A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.

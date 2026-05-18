@@ -70,7 +70,8 @@ python3 cli/se taskgen <project_id> <page_id> --yes        # writes Plane + Grav
 # `se o` is a shorthand alias for `se orchestrator` — both forms work identically.
 python3 cli/se o route <issue_id> --target-repo <path>
 python3 cli/se o pick --team fix-bug --target-repo <path>
-python3 cli/se o deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0
+python3 cli/se o deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0 (single)
+python3 cli/se o deploy --all --team T --target-repo <path>     # batch: every ready issue on team T
 python3 cli/se o expand <epic-id> --target-repo <path>          # epic → task-generator
 python3 cli/se o fix-bug claim|verify|pr <id> --target-repo <path>
 python3 cli/se o qa load|report <id> --target-repo <path>

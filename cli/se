@@ -1257,50 +1257,189 @@ def cmd_orchestrator_qa_report(args: argparse.Namespace) -> None:
     sys.exit(_orch_invoke("qa_report.py", "orch_qa_report", argv))
 
 
+def _orch_pick_ids(team: str, target_repo: str, limit: int) -> list[str]:
+    """Run pick_ready.py as a subprocess and return the issue IDs.
+
+    Subprocess (not in-process) so we get a clean JSON capture on stdout —
+    pick_ready writes a JSON array and we need to parse it after each
+    call without interfering with other module-level state.
+    """
+    script = _orch_script("pick_ready.py")
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return []
+    r = subprocess.run(
+        [sys.executable, str(script),
+         "--team", team, "--target-repo", target_repo,
+         "--limit", str(limit)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(f"pick_ready({team}) failed: {r.stderr.strip()}", file=sys.stderr)
+        return []
+    try:
+        items = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [it.get("id", "") for it in items if it.get("id")]
+
+
+def _orch_route(issue_id: str, target_repo: str) -> tuple[int, dict]:
+    """Run route.py as a subprocess; return (exit_code, route_info_dict).
+
+    Subprocess so we can capture the JSON output without consuming sys.exit
+    inside the loop.
+    """
+    route_script = _orch_script("route.py")
+    if not route_script.exists():
+        print(f"ERROR: {route_script} not found", file=sys.stderr)
+        return 1, {}
+    r = subprocess.run(
+        [sys.executable, str(route_script),
+         issue_id, "--target-repo", target_repo],
+        capture_output=True, text=True,
+    )
+    print(r.stdout, end="")
+    if r.stderr:
+        print(r.stderr, end="", file=sys.stderr)
+    if r.returncode != 0:
+        return r.returncode, {}
+    try:
+        return 0, json.loads(r.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError):
+        print("ERROR: could not parse route.py output", file=sys.stderr)
+        return 2, {}
+
+
+def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
+    """Fire Phase 0 for resolved team. Returns dispatch exit code.
+
+    Uses subprocess (not _orch_invoke) so a single-issue dispatch does
+    not call sys.exit and prematurely terminate the --all loop.
+    """
+    if team == "fix-bug":
+        script_name = "fix_bug_claim.py"
+    elif team == "qa":
+        script_name = "qa_load.py"
+    elif team == "task-generator":
+        script_name = "task_gen_expand.py"
+    elif team == "epic-task":
+        print(
+            f"  Team 'epic-task' (task/story/subtask) currently runs via "
+            f"the /ship slash command in Claude Code — no `se` equivalent yet.\n"
+            f"  Run inside the target repo:  claude  →  /ship {issue_id}",
+            file=sys.stderr,
+        )
+        return 0
+    else:
+        print(f"ERROR: unknown team '{team}'", file=sys.stderr)
+        return 1
+
+    script = _orch_script(script_name)
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        return 1
+    r = subprocess.run(
+        [sys.executable, str(script), issue_id, "--target-repo", target_repo],
+    )
+    return r.returncode
+
+
 def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     """Composite: route (or pick) → Phase 0 entry for the resolved team.
 
+    Three modes:
     - With <id>: route the issue, then fire the team's Phase 0 step.
-    - Without <id>: pick next ready item for --team (or scan all teams),
-      then route + dispatch.
+    - Without <id>, no --all: pick next ready item for --team (or scan
+      all teams), then route + dispatch a single issue.
+    - With --all --team T: loop over every ready issue for team T
+      (capped by --limit, default 100), routing + dispatching each.
+      Default behaviour is continue-on-error; pass --stop-on-error
+      to bail on the first failure.
 
     Multi-phase pipelines (fix-bug, QA) only get Phase 0 here. Operator
     drives subsequent phases (verify, pr, report) manually with
-    `se orchestrator fix-bug verify|pr` / `se orchestrator qa report`.
+    `se o fix-bug verify|pr` / `se o qa report`.
     """
     target_repo = args.target_repo
 
-    # 1. Resolve issue_id
+    # ── Mode 3: --all batch loop ─────────────────────────────────────────
+    if args.all:
+        if args.id:
+            print("ERROR: --all cannot be combined with <id>", file=sys.stderr)
+            sys.exit(2)
+        if not args.team:
+            print("ERROR: --all requires --team T", file=sys.stderr)
+            sys.exit(2)
+
+        team = args.team
+        limit = args.limit or 100
+        ids = _orch_pick_ids(team, target_repo, limit)
+        if not ids:
+            print(f"No ready issues for team={team} in {target_repo}.")
+            sys.exit(0)
+
+        print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
+              f"(limit={limit}).")
+        if args.dry_run:
+            for iid in ids:
+                print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
+            sys.exit(0)
+
+        dispatched: list[str] = []
+        failed: list[tuple[str, int]] = []
+        skipped: list[tuple[str, str]] = []
+
+        for idx, iid in enumerate(ids, start=1):
+            print(f"\n[{idx}/{len(ids)}] {iid}")
+            rc, route_info = _orch_route(iid, target_repo)
+            if rc != 0:
+                failed.append((iid, rc))
+                if args.stop_on_error:
+                    break
+                continue
+
+            routed_team = route_info.get("team", "")
+            if routed_team != team:
+                # Routing disagreed with the team filter. Skip — don't
+                # cross teams within a single --all batch.
+                skipped.append((iid, f"routed as {routed_team}, not {team}"))
+                continue
+
+            print(f"→ Dispatching {iid} to team={team} (Phase 0)")
+            rc = _orch_dispatch_phase0(iid, team, target_repo)
+            if rc == 0:
+                dispatched.append(iid)
+            else:
+                failed.append((iid, rc))
+                if args.stop_on_error:
+                    break
+
+        # Summary
+        print(f"\n── Batch summary (team={team}) ──")
+        print(f"  dispatched: {len(dispatched)}  "
+              f"failed: {len(failed)}  "
+              f"skipped: {len(skipped)}  "
+              f"of {len(ids)} candidates")
+        for iid, reason in skipped:
+            print(f"  skipped {iid}: {reason}")
+        for iid, rc in failed:
+            print(f"  failed {iid}: exit={rc}")
+        sys.exit(0 if not failed else 1)
+
+    # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────
     issue_id = args.id
     if not issue_id:
-        # Auto-pick
+        # Auto-pick from one team or scan all four teams (priority order)
         teams = [args.team] if args.team else [
             "fix-bug", "epic-task", "qa", "task-generator",
         ]
         for team in teams:
-            # Run pick_ready in subprocess so we can capture stdout
-            # (pick_ready.main writes JSON to stdout).
-            script = _orch_script("pick_ready.py")
-            if not script.exists():
-                print(f"ERROR: {script} not found", file=sys.stderr)
-                sys.exit(1)
-            r = subprocess.run(
-                [sys.executable, str(script),
-                 "--team", team, "--target-repo", target_repo, "--limit", "1"],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                print(f"pick_ready({team}) failed: {r.stderr.strip()}", file=sys.stderr)
-                continue
-            try:
-                items = json.loads(r.stdout or "[]")
-            except json.JSONDecodeError:
-                items = []
-            if items:
-                issue_id = items[0].get("id", "")
-                if issue_id:
-                    print(f"Auto-picked from team={team}: {issue_id}")
-                    break
+            picked = _orch_pick_ids(team, target_repo, 1)
+            if picked:
+                issue_id = picked[0]
+                print(f"Auto-picked from team={team}: {issue_id}")
+                break
         if not issue_id:
             print(
                 f"No ready issues found for "
@@ -1309,26 +1448,9 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
 
-    # 2. Route — same in-process invoke; we need the team back, so subprocess
-    #    to capture JSON.
-    route_script = _orch_script("route.py")
-    if not route_script.exists():
-        print(f"ERROR: {route_script} not found", file=sys.stderr)
-        sys.exit(1)
-    r = subprocess.run(
-        [sys.executable, str(route_script), issue_id, "--target-repo", target_repo],
-        capture_output=True, text=True,
-    )
-    print(r.stdout, end="")
-    if r.stderr:
-        print(r.stderr, end="", file=sys.stderr)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
-    try:
-        route_info = json.loads(r.stdout.strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError):
-        print("ERROR: could not parse route.py output", file=sys.stderr)
-        sys.exit(2)
+    rc, route_info = _orch_route(issue_id, target_repo)
+    if rc != 0:
+        sys.exit(rc)
 
     team = route_info.get("team", "")
     if args.team and args.team != team:
@@ -1341,36 +1463,8 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         print(f"[dry-run] Would dispatch {issue_id} to team={team} Phase 0.")
         sys.exit(0)
 
-    # 3. Dispatch Phase 0 for resolved team
     print(f"\n→ Dispatching {issue_id} to team={team} (Phase 0)")
-    if team == "fix-bug":
-        sys.exit(_orch_invoke(
-            "fix_bug_claim.py", "orch_fix_bug_claim",
-            [issue_id, "--target-repo", target_repo],
-        ))
-    elif team == "qa":
-        sys.exit(_orch_invoke(
-            "qa_load.py", "orch_qa_load",
-            [issue_id, "--target-repo", target_repo],
-        ))
-    elif team == "task-generator":
-        sys.exit(_orch_invoke(
-            "task_gen_expand.py", "orch_task_gen_expand",
-            [issue_id, "--target-repo", target_repo],
-        ))
-    elif team == "epic-task":
-        print(
-            f"Team 'epic-task' (task/story/subtask) currently runs via the "
-            f"/ship slash command in Claude Code — no `se` equivalent yet.\n"
-            f"Run inside the target repo:\n"
-            f"  claude\n"
-            f"  /ship {issue_id}",
-            file=sys.stderr,
-        )
-        sys.exit(0)
-    else:
-        print(f"ERROR: unknown team '{team}'", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(_orch_dispatch_phase0(issue_id, team, target_repo))
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -1581,18 +1675,30 @@ def main() -> None:
     # se orchestrator deploy [<id>] [--team T]
     p_orch_dep = orch_sub.add_parser(
         "deploy",
-        help="Route + fire Phase 0 for an issue (auto-picks if <id> omitted)",
+        help="Route + fire Phase 0 for an issue (auto-picks if <id> omitted; "
+             "use --all to batch over an entire team)",
     )
     p_orch_dep.add_argument("id", nargs="?", default=None,
                             help="Grava issue ID. Omit to auto-pick.")
     p_orch_dep.add_argument(
         "--team", default=None,
         choices=("fix-bug", "epic-task", "qa", "task-generator"),
-        help="Filter for auto-pick. Ignored when <id> is given (route decides).",
+        help="Filter for auto-pick / required for --all. "
+             "Ignored when <id> is given (route decides).",
     )
     p_orch_dep.add_argument("--target-repo", default=".", metavar="PATH")
     p_orch_dep.add_argument("--dry-run", action="store_true",
                             help="Route only — do not fire Phase 0")
+    p_orch_dep.add_argument("--all", action="store_true",
+                            help="Loop over every ready issue for --team T, "
+                                 "firing Phase 0 for each. Requires --team. "
+                                 "Default: continue on per-issue errors.")
+    p_orch_dep.add_argument("--limit", type=int, default=None,
+                            help="Max issues to pick when --all is set "
+                                 "(default: 100). Ignored otherwise.")
+    p_orch_dep.add_argument("--stop-on-error", action="store_true",
+                            help="With --all: bail at the first per-issue "
+                                 "failure instead of continuing.")
 
     # se orchestrator fix-bug {claim,verify,pr}
     p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")
