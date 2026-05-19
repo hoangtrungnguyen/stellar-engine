@@ -102,6 +102,8 @@ Both AC and UI/UX are **story-level** fields (not epic-level).
 
 ### Epic dependencies
 
+> **Full authoring guide:** [docs/generator/epic-dependencies.md](../../docs/generator/epic-dependencies.md) covers Mermaid grammar, label normalisation, real-world examples (CAPP fan-out), validation, anti-patterns, and a copy-paste template.
+
 The source markdown may declare cross-epic dependencies in a dedicated
 `## Epic dependencies` section, using a Mermaid `graph` / `flowchart`
 block:

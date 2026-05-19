@@ -131,6 +131,7 @@ python3 upload_wiki_page.py docs/notes.md
 | [`docs/self-host/self-host-plane-plan.md`](docs/self-host/self-host-plane-plan.md) | Plan for running Plane locally |
 | [`docs/generator/usage.md`](docs/generator/usage.md) | Generator agent — full operator walkthrough (markdown → Plane → grava) |
 | [`docs/generator/plan.md`](docs/generator/plan.md) | Generator agent — phase-by-phase implementation plan + status |
+| [`docs/generator/epic-dependencies.md`](docs/generator/epic-dependencies.md) | Authoring guide for `## Epic dependencies` Mermaid graphs (grammar, label normalisation, fan-out examples, anti-patterns) |
 | [`agents/generator/README.md`](agents/generator/README.md) | Generator agent — quick reference |
 | [`docs/task-generator/`](docs/task-generator) | 11 design docs for task-generator (parser, planner, writers, data-model, …) |
 | [`docs/repository-folder-level-orchestrator/ORCHESTRATOR_AGENT.md`](docs/repository-folder-level-orchestrator/ORCHESTRATOR_AGENT.md) | In-repo orchestrator design (predecessor of `agents/orchestrator/`) |

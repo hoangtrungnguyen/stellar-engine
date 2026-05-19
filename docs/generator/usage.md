@@ -99,7 +99,7 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
    - `design_links` is optional. Each entry is `{label, url}`; `label: null` renders as a bare URL/path.
    - Both `acceptance_criteria` and `design_links` are **story-level** (not epic-level).
    - `epics[].depends_on` is optional (default `[]`) and carries **epic-level** dependency refs (another epic's title or `EPIC-N` slug). Render emits a `> Depends on: …` blockquote under the H2; task-generator turns it into Plane `blocking` relations after epics exist.
-3. **If the source has a `## Epic dependencies` Mermaid block**, `extract.json` carries the parsed edges under `epic_dependencies`:
+3. **If the source has a `## Epic dependencies` Mermaid block**, `extract.json` carries the parsed edges under `epic_dependencies`. See [`epic-dependencies.md`](epic-dependencies.md) for the full authoring guide — grammar, label normalisation, fan-out examples, and a copy-paste template. Quick recap:
    ```markdown
    ## Epic dependencies
 
