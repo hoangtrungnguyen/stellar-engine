@@ -165,6 +165,7 @@ class Section:
   {
     "epics": [
       {"title": "...", "summary": "...", "source_anchors": ["..."],
+       "depends_on": ["<other epic title or EPIC-N slug>"],
        "stories": [
          {"title": "...",
           "description_md": "As a stakeholder, I want…, so that…",
@@ -185,7 +186,9 @@ class Section:
   - `acceptance_criteria` is a list of strings, story-level criteria.
   - `design_links` is optional; empty list / omitted = no UI/UX section rendered. Each entry: `{label, url}`. `label` null → render as a bare URL or path.
   - Both `acceptance_criteria` and `design_links` are now **story-level** fields (was epic-level for `design_links` in earlier drafts).
+  - `epics[].depends_on` (optional, default `[]`) carries **epic-level** dependencies. Each ref is another epic's title (preferred) or `EPIC-N` slug; render emits a `> Depends on: …` blockquote under the H2 and task-generator turns it into Plane `blocking` relations post-creation. Unresolved refs are silently skipped downstream.
 - Operator paste the IR sections + the schema above into a Claude Code session and asks for matching JSON.
+- **Folding epic dependencies from `extract.json`:** when the source contains a `## Epic dependencies` section with a Mermaid `graph` / `flowchart` block, `cli/extract.py` writes the parsed edges to `extract.json` under the top-level key `epic_dependencies` (shape: `[{"from": "...", "to": "..."}, ...]`). Mermaid `A --> B` means **B depends on A**, so for each edge `{from: A, to: B}` add `A` to `Epic(title=B).depends_on` when authoring outline.json. Use bracket labels (`A[Court Booking]`) for multi-word epics so the labels match epic titles directly.
 
 **D3. `cli/outline.py`** *(future)*.
 - Will read `extract.json`, call `llm_client.outline()`, write `outline.json`.

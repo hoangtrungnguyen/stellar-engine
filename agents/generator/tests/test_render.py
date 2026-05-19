@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from generator.ir import outline_from_dict
+from generator.ir import Epic, outline_from_dict
 from generator.render import (
     RenderMeta,
     render,
@@ -194,3 +194,56 @@ def test_section_order_within_story():
     pos_ac = us01.index("#### Acceptance Criteria")
     pos_design = us01.index("#### UI/UX Design")
     assert pos_desc < pos_task < pos_ac < pos_design
+
+
+# ── Epic.depends_on blockquote (epic-level dependencies) ──────────────────────
+
+
+def test_epic_depends_on_blockquote_directly_after_h2():
+    """`> Depends on: X` must sit on the line immediately after `## <title>`."""
+    epic = Epic(title="Cancellations", depends_on=["Court Booking"])
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    lines = text.splitlines()
+    h2_idx = lines.index("## Cancellations")
+    assert lines[h2_idx + 1] == "> Depends on: Court Booking"
+
+
+def test_epic_depends_on_blockquote_omitted_when_empty():
+    epic = Epic(title="Authentication")
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    assert "> Depends on:" not in text
+
+
+def test_epic_depends_on_multiple_refs_comma_separated():
+    epic = Epic(title="C", depends_on=["A", "B"])
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    assert "> Depends on: A, B" in text
+
+
+def test_epic_depends_on_precedes_summary():
+    """If both `depends_on` and `summary` are set, the blockquote comes first."""
+    epic = Epic(
+        title="Cancellations",
+        summary="Refund window + audit log.",
+        depends_on=["Court Booking"],
+    )
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    pos_quote = text.index("> Depends on: Court Booking")
+    pos_summary = text.index("Refund window")
+    assert pos_quote < pos_summary
+
+
+def test_epic_depends_on_distinct_from_story_blockquote():
+    """An epic with both epic-level and story-level deps must render both
+    blockquotes — one under H2, one under H3 — without merging or
+    duplicating either."""
+    from generator.ir import Story
+    epic = Epic(
+        title="Cancellations",
+        depends_on=["Court Booking"],
+        stories=[Story(title="US-10 — Cancel a booking", depends_on=["auth"])],
+    )
+    text = render_epic(epic, system_name="Demo", meta=_meta())
+    # Exactly two blockquote lines, distinct content.
+    quote_lines = [l for l in text.splitlines() if l.startswith("> Depends on:")]
+    assert quote_lines == ["> Depends on: Court Booking", "> Depends on: auth"]

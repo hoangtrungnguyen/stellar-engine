@@ -40,6 +40,7 @@
       "title": "Cancellations",
       "summary": "Refund window + audit log.",
       "source_anchors": ["L35"],
+      "depends_on": ["Court Booking"],
       "stories": []
     }
   ],

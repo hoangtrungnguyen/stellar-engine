@@ -69,6 +69,7 @@ generator_model_version: n/a
 # <system name>
 
 ## <Epic title>
+> Depends on: <ref1>, <ref2>   ← rendered iff epic.depends_on is non-empty
 
 <optional epic summary paragraph>
 
@@ -99,12 +100,59 @@ Routing rules in the downstream task-generator parser:
 
 Both AC and UI/UX are **story-level** fields (not epic-level).
 
+### Epic dependencies
+
+> **Full authoring guide:** [docs/generator/epic-dependencies.md](../../docs/generator/epic-dependencies.md) covers Mermaid grammar, label normalisation, real-world examples (CAPP fan-out), validation, anti-patterns, and a copy-paste template.
+
+The source markdown may declare cross-epic dependencies in a dedicated
+`## Epic dependencies` section, using a Mermaid `graph` / `flowchart`
+block:
+
+````markdown
+## Epic dependencies
+
+```mermaid
+graph TD
+  A[Authentication] --> B[Court Booking]
+  B --> C[Cancellations]
+```
+````
+
+`cli/extract.py` parses this block and writes the edge list to
+`extract.json` under the `epic_dependencies` key:
+
+```json
+{
+  "source": "...",
+  "source_label": "...",
+  "root": { /* Section tree */ },
+  "epic_dependencies": [
+    {"from": "Authentication", "to": "Court Booking"},
+    {"from": "Court Booking",  "to": "Cancellations"}
+  ]
+}
+```
+
+Direction semantics: Mermaid `A --> B` reads "A leads to B" → A must be
+done before B → **B depends on A**. When hand-writing `outline.json`,
+for each edge `{from: A, to: B}` add `A` to `Epic(title=B).depends_on`.
+The render step then emits a `> Depends on: A` blockquote directly
+under the epic's H2; task-generator Phase 6 turns it into Plane
+`blocking` relations after all epics exist.
+
+Refs in `Epic.depends_on` may be the epic title (preferred, matches
+verbatim against the rendered H2) or the `EPIC-N` slug. Use the
+**label inside brackets** (`A[Court Booking]`) for multi-word titles so
+task-generator's resolver finds them via casefold + whitespace-collapse
+match. Unresolved refs are silently skipped downstream — typos go
+undetected, so review the rendered draft before promoting.
+
 ## Phase D — interim workflow
 
 `--llm` will fail loudly with `LLMNotEnabled` until Phase D lands. The interim outline path is manual via a Claude Code session:
 
 1. Run `se generate <source.md> --project <name> --no-llm` (or `--dry-run`) — writes `extract.json`.
-2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
+2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].depends_on` (folded from `extract.json` `epic_dependencies` — see [Epic dependencies](#epic-dependencies) above), `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
 3. Save the produced `outline.json` into `drafts/<project>/runs/<RID>/outline.json`.
 4. Re-run with `--step render` (or rerun the full chain; the orchestrator picks up the existing `outline.json`).
 

@@ -11,6 +11,7 @@ from generator.cli import extract
 
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample.md"
+_FIXTURE_DEPS = Path(__file__).resolve().parent / "fixtures" / "sample_epic_deps.md"
 
 
 def _run(monkeypatch, capsys, argv: list[str]) -> tuple[int, str, str]:
@@ -107,3 +108,48 @@ def test_help_exits_zero(capsys):
     with pytest.raises(SystemExit) as exc:
         extract.build_parser().parse_args(["--help"])
     assert exc.value.code == 0
+
+
+# ── epic_dependencies (mermaid graph in `## Epic dependencies` section) ───────
+
+
+def test_epic_dependencies_emitted(tmp_path, capsys):
+    """Source with `## Epic dependencies` + mermaid graph → extract.json
+    carries an `epic_dependencies` array with one entry per edge."""
+    work = tmp_path / "run-deps"
+    rc = extract.main([str(_FIXTURE_DEPS), "--work-dir", str(work)])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    payload = json.loads((work / "extract.json").read_text())
+    assert payload["epic_dependencies"] == [
+        {"from": "Authentication", "to": "Court Booking"},
+        {"from": "Court Booking", "to": "Cancellations"},
+    ]
+
+
+def test_no_dep_section_omits_field(tmp_path, capsys):
+    """The original `sample.md` fixture has no `## Epic dependencies`
+    section — `epic_dependencies` must be absent from extract.json (not
+    written as an empty list)."""
+    work = tmp_path / "run-no-deps"
+    rc = extract.main([str(_FIXTURE), "--work-dir", str(work)])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    payload = json.loads((work / "extract.json").read_text())
+    assert "epic_dependencies" not in payload
+
+
+def test_dep_section_without_mermaid_omits_field(tmp_path, capsys):
+    """`## Epic dependencies` section exists but contains no mermaid
+    block (e.g. just prose) → field omitted (parser has nothing to
+    extract)."""
+    src = tmp_path / "no_mermaid.md"
+    src.write_text(
+        "# Demo\n\n## Epic dependencies\n\nNo mermaid graph here, just prose.\n"
+    )
+    work = tmp_path / "run-prose"
+    rc = extract.main([str(src), "--work-dir", str(work)])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    payload = json.loads((work / "extract.json").read_text())
+    assert "epic_dependencies" not in payload

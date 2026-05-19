@@ -74,6 +74,7 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
          "title": "...",
          "summary": "...",
          "source_anchors": ["..."],
+         "depends_on": ["<other epic title or EPIC-N slug>"],
          "stories": [
            {
              "title": "...",
@@ -97,7 +98,26 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
    - `acceptance_criteria` is a list of strings — story-level criteria.
    - `design_links` is optional. Each entry is `{label, url}`; `label: null` renders as a bare URL/path.
    - Both `acceptance_criteria` and `design_links` are **story-level** (not epic-level).
-3. Save the JSON to the run directory:
+   - `epics[].depends_on` is optional (default `[]`) and carries **epic-level** dependency refs (another epic's title or `EPIC-N` slug). Render emits a `> Depends on: …` blockquote under the H2; task-generator turns it into Plane `blocking` relations after epics exist.
+3. **If the source has a `## Epic dependencies` Mermaid block**, `extract.json` carries the parsed edges under `epic_dependencies`. See [`epic-dependencies.md`](epic-dependencies.md) for the full authoring guide — grammar, label normalisation, fan-out examples, and a copy-paste template. Quick recap:
+   ```markdown
+   ## Epic dependencies
+
+   ```mermaid
+   graph TD
+     A[Authentication] --> B[Court Booking]
+     B --> C[Cancellations]
+   ```
+   ```
+   yields
+   ```json
+   "epic_dependencies": [
+     {"from": "Authentication", "to": "Court Booking"},
+     {"from": "Court Booking",  "to": "Cancellations"}
+   ]
+   ```
+   Mermaid `A --> B` means "A leads to B" → **B depends on A**. Fold each edge `{from: A, to: B}` into `Epic(title=B).depends_on += [A]` when authoring `outline.json`. Use bracket labels (`A[Court Booking]`) for multi-word epics so the labels match epic titles directly.
+4. Save the JSON to the run directory:
    ```bash
    $EDITOR drafts/STELL/runs/20260516T120937Z/outline.json
    # paste the JSON Claude produced, save

@@ -3,6 +3,12 @@
 Reads <source> (markdown today), invokes the markdown parser, and writes
 `<work-dir>/extract.json` containing the Section IR tree.
 
+If the source contains a `## Epic dependencies` section with a Mermaid
+`graph` / `flowchart` block, the parsed edges are also written to
+extract.json under the `epic_dependencies` key as a list of
+`{"from": ..., "to": ...}` objects. Unrecognised section bodies are
+silently skipped (the field is omitted).
+
 Exit codes:
   0  extract.json written
   1  bad source path / unsupported file type / missing work-dir
@@ -59,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     # Import here so `extract.py --help` works without the parser import path
     # being set up (handy in CI where tests resolve imports differently).
     from generator.parser.markdown import parse_markdown
+    from generator.mermaid import extract_edges
 
     try:
         root = parse_markdown(source)
@@ -72,6 +79,17 @@ def main(argv: list[str] | None = None) -> int:
         "root": asdict(root),
     }
 
+    # Optional: parse `## Epic dependencies` mermaid block, if present, into
+    # a structured edge list. Silent skip on unrecognised bodies — the
+    # operator gets `epic_dependencies` only when we can extract something.
+    deps_body = _find_dep_mermaid_block(root)
+    if deps_body is not None:
+        edges = extract_edges(deps_body)
+        if edges:
+            payload["epic_dependencies"] = [
+                {"from": src, "to": dst} for src, dst in edges
+            ]
+
     out_path = work_dir / "extract.json"
     try:
         out_path.write_text(json.dumps(payload, indent=2))
@@ -83,6 +101,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.stdout:
         print(json.dumps(payload, indent=2))
     return 0
+
+
+def _find_dep_mermaid_block(root) -> str | None:
+    """Walk the parsed Section tree; return the body of the first code
+    block under a `## Epic dependencies` heading whose first non-blank
+    line starts with `graph ` or `flowchart `. None when absent.
+
+    Heading matching is case-insensitive + whitespace-tolerant so
+    `## Epic Dependencies` / `## EPIC DEPENDENCIES` etc. all qualify.
+    """
+    target = "epic dependencies"
+    for section in _walk_sections(root):
+        if section.heading.text.strip().casefold() != target:
+            continue
+        for block in section.blocks:
+            if block.kind != "code":
+                continue
+            first = next((l for l in block.text.splitlines() if l.strip()), "")
+            head = first.strip()
+            if head.startswith("graph ") or head.startswith("flowchart "):
+                return block.text
+    return None
+
+
+def _walk_sections(section):
+    """Depth-first traversal of a Section tree."""
+    yield section
+    for child in section.children:
+        yield from _walk_sections(child)
 
 
 if __name__ == "__main__":
