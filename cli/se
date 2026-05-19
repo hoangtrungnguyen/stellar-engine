@@ -379,6 +379,75 @@ def _install_claude_assets(
     return created, skipped, missing
 
 
+# ── full agent-tree scaffold (operator-local copy of agents/<name>/) ─────────
+#
+# `se init` (default ON, opt-out with --no-agent-trees) materialises every
+# bundled subagent's full source tree under <base>/agents/<name>/ so the
+# operator can read, customise, or fork the agent without spelunking into
+# the stellar-engine checkout or PyInstaller bundle.
+#
+# Source: <src_root>/agents/<name>/  (canonical bundle contents)
+# Target: <base>/agents/<name>/      (operator's working copy)
+#
+# Excluded from the copy: __pycache__/, .pytest_cache/, .mypy_cache/, and
+# *.pyc / *.pyo files — runtime caches that have no business being scaffolded.
+#
+# Idempotency is per-file. If a destination file already exists and
+# --force-agent-trees was NOT passed, that single file is skipped; other
+# new files in the tree still get written. Lets operators safely re-run
+# `se init` after editing a doc — only un-touched files get refreshed.
+
+
+_AGENT_TREE_EXCLUDE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache"}
+_AGENT_TREE_EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _install_agent_trees(
+    base: Path,
+    *,
+    force: bool = False,
+) -> tuple[list[str], list[str], list[str]]:
+    """Copy bundled `agents/<name>/` subtrees into `<base>/agents/<name>/`.
+
+    Returns (created, skipped, missing_sources) with the same shape as
+    `_install_claude_assets`. Each entry in `created` / `skipped` is a
+    per-file path so the init summary stays granular.
+    """
+    created: list[str] = []
+    skipped: list[str] = []
+    missing: list[str] = []
+
+    src_root = _repo_root()
+
+    for name in _SUBAGENTS:
+        src_dir = src_root / "agents" / name
+        if not src_dir.exists():
+            missing.append(str(src_dir))
+            continue
+        dst_dir = base / "agents" / name
+        for src_file in src_dir.rglob("*"):
+            if any(part in _AGENT_TREE_EXCLUDE_DIRS for part in src_file.parts):
+                continue
+            if src_file.suffix in _AGENT_TREE_EXCLUDE_SUFFIXES:
+                continue
+            if not src_file.is_file():
+                continue
+            rel = src_file.relative_to(src_dir)
+            dst_file = dst_dir / rel
+            if dst_file.exists() and not force:
+                skipped.append(str(dst_file))
+                continue
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            dst_file.write_bytes(src_file.read_bytes())
+            # Preserve executable bit (matters for shell hooks bundled
+            # alongside Python source).
+            if os.access(src_file, os.X_OK):
+                dst_file.chmod(dst_file.stat().st_mode | 0o111)
+            created.append(str(dst_file))
+
+    return created, skipped, missing
+
+
 # ── se init ───────────────────────────────────────────────────────────────────
 
 
@@ -423,6 +492,23 @@ def cmd_init(args: argparse.Namespace) -> None:
                 "(broken bundle?):"
             )
             for m in ca_missing:
+                print(f"           {m}")
+
+    # Materialise full agent source trees under <base>/agents/<name>/ so
+    # the operator can read / customise / fork each agent without digging
+    # into the stellar-engine checkout or PyInstaller bundle.
+    if not getattr(args, "no_agent_trees", False):
+        at_created, at_skipped, at_missing = _install_agent_trees(
+            base, force=getattr(args, "force_agent_trees", False)
+        )
+        created.extend(at_created)
+        skipped.extend(at_skipped)
+        if at_missing:
+            print(
+                "  warning  bundled agent source trees not found "
+                "(broken bundle?):"
+            )
+            for m in at_missing:
                 print(f"           {m}")
 
     for p in created:
@@ -1651,7 +1737,8 @@ def main() -> None:
     p_init = sub.add_parser(
         "init",
         help="Scaffold repos.yaml, policies/default.yaml, logs/, "
-             ".env.example, docs/env-setup.md, .claude/agents/, .claude/commands/",
+             ".env.example, docs/env-setup.md, .claude/agents/, "
+             ".claude/commands/, agents/{generator,task-generator,orchestrator}/",
     )
     p_init.add_argument("--dir", default=".", metavar="DIR",
                         help="Directory to scaffold into (default: cwd)")
@@ -1661,6 +1748,13 @@ def main() -> None:
     p_init.add_argument("--force-claude-assets", action="store_true",
                         dest="force_claude_assets",
                         help="Overwrite existing .claude/{agents,commands}/*.md")
+    p_init.add_argument("--no-agent-trees", action="store_true",
+                        dest="no_agent_trees",
+                        help="Skip installing full agent source trees under "
+                             "<dir>/agents/{generator,task-generator,orchestrator}/")
+    p_init.add_argument("--force-agent-trees", action="store_true",
+                        dest="force_agent_trees",
+                        help="Overwrite existing files in <dir>/agents/<name>/")
 
     p_repos = sub.add_parser("repos", help="List or modify configured repos")
     repos_sub = p_repos.add_subparsers(dest="repos_cmd", metavar="ACTION")
