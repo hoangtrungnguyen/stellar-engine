@@ -4,8 +4,12 @@ The output format is the contract consumed by `agents/task-generator/parser.py`
 (see `docs/task-generator/parser.md` and `docs/generator/plan.md` §E1):
 
   - H1 = system name
-  - H2 per epic, optional summary paragraph
-  - H3 per story; optional `> Depends on: …` blockquote when story has deps
+  - H2 per epic; optional `> Depends on: …` blockquote when the epic has
+    `depends_on` set (epic-level dependency, mirrored to Plane `blocking`
+    relations by task-generator Phase 6)
+  - Optional epic summary paragraph
+  - H3 per story; optional `> Depends on: …` blockquote when the story
+    has deps
   - Story description paragraph (e.g. "As a … I want … so that …")
   - Plain bullet list directly under the story = tasks
   - `#### Acceptance Criteria` H4 subsection (when set) with one bullet
@@ -74,6 +78,11 @@ def render_epic(epic: Epic, *, system_name: str, meta: RenderMeta) -> str:
         "",
         f"## {epic.title}",
     ]
+    # Epic-level dependency blockquote sits directly under the H2 — task-gen's
+    # parser scans for it before the first H3. Position-tolerant, but this
+    # reads most naturally.
+    if epic.depends_on:
+        parts.append(f"> Depends on: {', '.join(epic.depends_on)}")
     if epic.summary:
         parts.extend(["", epic.summary])
     for story in epic.stories:

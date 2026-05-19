@@ -73,6 +73,11 @@ class Epic:
     summary: str = ""
     source_anchors: list[str] = field(default_factory=list)
     stories: list[Story] = field(default_factory=list)
+    # Epic-level dependency refs (epic title or `EPIC-N` slug). Rendered as
+    # `> Depends on: …` blockquote under the H2 in render.py; consumed by
+    # `agents/task-generator/dependency_analyzer.py` to create Plane
+    # `blocking` relations during Phase 6 (post-epic-creation).
+    depends_on: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -119,6 +124,7 @@ def outline_from_dict(d: dict[str, Any]) -> Outline:
             summary=e.get("summary", ""),
             source_anchors=list(e.get("source_anchors", [])),
             stories=[_story(s) for s in e.get("stories", [])],
+            depends_on=list(e.get("depends_on", [])),
         )
 
     return Outline(

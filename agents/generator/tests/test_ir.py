@@ -130,3 +130,45 @@ def test_outline_confidence_preserved(confidence):
     o = Outline(confidence=confidence)
     o2 = outline_from_dict(json.loads(json.dumps(asdict(o))))
     assert o2.confidence == confidence
+
+
+# ── Epic.depends_on (epic-level dependencies) ─────────────────────────────────
+
+
+def test_epic_depends_on_round_trip():
+    raw = {
+        "epics": [
+            {"title": "Authentication"},
+            {"title": "Court Booking", "depends_on": ["Authentication"]},
+        ],
+        "confidence": 0.5,
+    }
+    o = outline_from_dict(raw)
+    assert o.epics[0].depends_on == []
+    assert o.epics[1].depends_on == ["Authentication"]
+
+
+def test_epic_depends_on_default_empty():
+    raw = {"epics": [{"title": "X"}], "confidence": 0.0}
+    o = outline_from_dict(raw)
+    assert o.epics[0].depends_on == []
+
+
+def test_epic_depends_on_dataclass_default():
+    e = Epic(title="X")
+    assert e.depends_on == []
+
+
+def test_epic_depends_on_multiple_refs_preserved():
+    raw = {
+        "epics": [{"title": "C", "depends_on": ["A", "B"]}],
+        "confidence": 0.0,
+    }
+    o = outline_from_dict(raw)
+    assert o.epics[0].depends_on == ["A", "B"]
+
+
+def test_epic_depends_on_serializes_via_asdict():
+    e = Epic(title="C", depends_on=["A", "B"])
+    d = asdict(e)
+    assert d["depends_on"] == ["A", "B"]
