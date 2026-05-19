@@ -179,3 +179,134 @@ def test_label_shape_variants(lhs, rhs):
     text = f"graph TD\n{lhs} --> {rhs}\n"
     edges = extract_edges(text)
     assert edges == [("Foo", "Bar")], f"failed for {lhs} --> {rhs}"
+
+
+# ── standalone node declarations (label-first authoring style) ────────────────
+
+
+def test_standalone_node_declaration_registers_label():
+    """A node declared on its own line (`A[Foo]` alone) registers the
+    label so later bare references resolve to it."""
+    text = (
+        "graph TD\n"
+        "A[Foo]\n"
+        "B[Bar]\n"
+        "A --> B\n"
+    )
+    assert extract_edges(text) == [("Foo", "Bar")]
+
+
+def test_standalone_node_with_paren_label():
+    text = "graph TD\nA(Foo)\nA --> B\n"
+    assert extract_edges(text) == [("Foo", "B")]
+
+
+def test_standalone_node_with_brace_label():
+    text = "graph TD\nA{Foo}\nA --> B\n"
+    assert extract_edges(text) == [("Foo", "B")]
+
+
+def test_standalone_node_with_quoted_label():
+    text = 'graph TD\nA["Foo"]\nA --> B\n'
+    assert extract_edges(text) == [("Foo", "B")]
+
+
+# ── HTML inside labels ────────────────────────────────────────────────────────
+
+
+def test_html_tag_stripped_from_label():
+    text = 'graph TD\nA["<b>Foo</b>"] --> B\n'
+    assert extract_edges(text) == [("Foo", "B")]
+
+
+def test_br_tag_becomes_space():
+    """`<br/>`, `<br>`, `<br />` separate the two halves of a multi-line
+    label — replace with a single space so the result is a sensible
+    one-line ref."""
+    for br in ("<br/>", "<br>", "<br />", "<BR/>"):
+        text = f'graph TD\nA["X{br}Y"] --> B\n'
+        assert extract_edges(text) == [("X Y", "B")], f"failed for {br!r}"
+
+
+def test_html_label_combined_tags_and_br():
+    """Real-world Mermaid often combines bold + br: `<b>ID</b><br/>Title`."""
+    text = 'graph TD\nA["<b>CAPP-2</b><br/>Authentication & Profile"] --> B\n'
+    assert extract_edges(text) == [("CAPP-2 Authentication & Profile", "B")]
+
+
+# ── class / classDef / style / subgraph (Mermaid styling, must be skipped) ────
+
+
+def test_classdef_lines_skipped():
+    text = (
+        "graph TD\n"
+        "classDef critical fill:#ffe9c2,stroke:#c2691a,stroke-width:3px,color:#000\n"
+        "A --> B\n"
+    )
+    assert extract_edges(text) == [("A", "B")]
+
+
+def test_class_assignment_skipped():
+    """`class A,B critical` assigns nodes to a style class — must not
+    be misread as edges."""
+    text = (
+        "graph TD\n"
+        "A --> B\n"
+        "class A,B critical\n"
+    )
+    assert extract_edges(text) == [("A", "B")]
+
+
+def test_style_line_skipped():
+    text = (
+        "graph TD\n"
+        "style A fill:#fff,stroke:#000\n"
+        "A --> B\n"
+    )
+    assert extract_edges(text) == [("A", "B")]
+
+
+# ── full real-world graph (regression: CAPP epic-deps spec) ───────────────────
+
+
+def test_real_world_capp_graph():
+    """The full graph the operator authored for the SportBuddies CAPP
+    spec — labels carry HTML (CAPP-id + bold + br + title), edges carry
+    text labels, and the block ends with classDef + class lines."""
+    text = '''graph TD
+    CAPP2["<b>CAPP-2</b><br/>Authentication & Profile"]
+    CAPP4["<b>CAPP-4</b><br/>Court Discovery"]
+    CAPP5["<b>CAPP-5</b><br/>Court Detail & Booking"]
+    CAPP5A["<b>CAPP-5A</b><br/>Recurring Bookings"]
+    CAPP6["<b>CAPP-6</b><br/>My Bookings"]
+    CAPP10["<b>CAPP-10</b><br/>Player Notifications"]
+
+    CAPP2 -->|session required| CAPP4
+    CAPP4 -->|map -> court detail| CAPP5
+    CAPP4 -.->|CAPP-054 join slot uses slot list| CAPP6
+    CAPP5 -->|entry from court detail 07| CAPP5A
+    CAPP5 -->|bookings & confirmed status| CAPP6
+    CAPP5A -->|series rows in list| CAPP6
+    CAPP5 -.->|booking status events| CAPP10
+    CAPP6 -.->|deep-link target| CAPP10
+
+    classDef critical fill:#ffe9c2,stroke:#c2691a,stroke-width:3px,color:#000
+    classDef parallel fill:#e3f0ff,stroke:#1a66c2,stroke-width:2px,color:#000
+    classDef cross fill:#f0e6ff,stroke:#6633b3,stroke-width:2px,color:#000
+
+    class CAPP2,CAPP4,CAPP5,CAPP6 critical
+    class CAPP5A parallel
+    class CAPP10 cross
+'''
+    edges = extract_edges(text)
+    expected = [
+        ("CAPP-2 Authentication & Profile",  "CAPP-4 Court Discovery"),
+        ("CAPP-4 Court Discovery",           "CAPP-5 Court Detail & Booking"),
+        ("CAPP-4 Court Discovery",           "CAPP-6 My Bookings"),
+        ("CAPP-5 Court Detail & Booking",    "CAPP-5A Recurring Bookings"),
+        ("CAPP-5 Court Detail & Booking",    "CAPP-6 My Bookings"),
+        ("CAPP-5A Recurring Bookings",       "CAPP-6 My Bookings"),
+        ("CAPP-5 Court Detail & Booking",    "CAPP-10 Player Notifications"),
+        ("CAPP-6 My Bookings",               "CAPP-10 Player Notifications"),
+    ]
+    assert edges == expected
