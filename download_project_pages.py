@@ -178,6 +178,81 @@ def render_markdown(page: dict, cfg: dict, project_id: str) -> str:
     return frontmatter + f"# {name}\n\n{body}\n"
 
 
+# Sentinel exit codes for resolve_page_by_name(). Caller maps these to
+# the script's process-level exit codes. Defined here so unit tests can
+# import the constants instead of hard-coding integers.
+PAGE_NAME_NOT_FOUND = 1
+PAGE_NAME_AMBIGUOUS = 2
+
+
+class PageNameResolutionError(SystemExit):
+    """Raised when --page-name cannot be resolved to a single page.
+
+    `kind` is one of `PAGE_NAME_NOT_FOUND` / `PAGE_NAME_AMBIGUOUS` so the
+    caller can decide on exit code + log shape without re-parsing the
+    error message string.
+    """
+
+    def __init__(self, kind: int, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
+def resolve_page_by_name(
+    cfg: dict,
+    project_uuid: str,
+    project_code: str,
+    name: str,
+    *,
+    include_private: bool,
+) -> str:
+    """Match a page by exact, case-sensitive name within a project.
+
+    Honours the public-only default — private pages are excluded from
+    the candidate pool unless `include_private=True`. Matches the
+    listing flow's privacy semantics: a private page named 'Foo' is
+    invisible to `--page-name Foo` unless the operator opts in.
+
+    Raises `PageNameResolutionError` with `kind=PAGE_NAME_AMBIGUOUS`
+    when multiple matches exist, or `kind=PAGE_NAME_NOT_FOUND` when
+    no match. Returns the page UUID on a unique match.
+    """
+    all_pages = list_pages(cfg, project_uuid)
+    candidates = all_pages if include_private else [
+        p for p in all_pages if is_public_page(p)
+    ]
+    matches = [p for p in candidates if p.get("name") == name]
+
+    if not matches:
+        # Could be a name typo OR a private-page-collision: include a
+        # hint about --include-private when there's a private page with
+        # this exact name that we filtered out.
+        hidden_private = [
+            p for p in all_pages
+            if p.get("name") == name and not is_public_page(p)
+        ]
+        hint = (
+            f" (1 private page with this name exists — "
+            f"pass --include-private to include it)"
+            if hidden_private and not include_private
+            else ""
+        )
+        raise PageNameResolutionError(
+            PAGE_NAME_NOT_FOUND,
+            f"ERROR: no page named {name!r} in project {project_code} "
+            f"(case-sensitive match){hint}",
+        )
+
+    if len(matches) > 1:
+        raise PageNameResolutionError(
+            PAGE_NAME_AMBIGUOUS,
+            f"ERROR: {len(matches)} pages named {name!r} in project "
+            f"{project_code}. Use --page-id <uuid> to disambiguate.",
+        )
+
+    return matches[0]["id"]
+
+
 def download_single_page(
     cfg: dict,
     project_uuid: str,
@@ -210,8 +285,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="Plane project UUID or short identifier (e.g. CAPP)")
     parser.add_argument("--output-root", default="systems",
                         help="Root directory (default: systems/)")
-    parser.add_argument("--page-id", default=None,
-                        help="Download only this page UUID (skips listing the project)")
+    # `--page-id` and `--page-name` are alternative ways to point at one
+    # specific page; rejecting both is cleaner than picking a precedence.
+    page_target = parser.add_mutually_exclusive_group()
+    page_target.add_argument("--page-id", default=None,
+                             help="Download only this page UUID (skips listing the project)")
+    page_target.add_argument("--page-name", default=None,
+                             help="Download only the page with this exact "
+                                  "(case-sensitive) name within the project. "
+                                  "Stops with exit 2 if multiple pages share "
+                                  "the name; use --page-id then.")
     parser.add_argument("--dry-run", action="store_true",
                         help="List pages without writing files")
     parser.add_argument("--include-private", action="store_true",
@@ -226,17 +309,35 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
 
-    # Single-page fast path. An explicit --page-id means the operator
-    # already knows exactly what they want — we honour it regardless of
-    # the page's access setting (private pages that the API can still
-    # read get downloaded). The public-only filter only gates the
-    # listing path below.
-    if args.page_id:
+    # `--page-name` resolves through the listing endpoint first, then
+    # hands off to the single-page fast path. Name match is exact and
+    # case-sensitive; private pages are excluded from candidates unless
+    # `--include-private` is passed (mirrors the listing flow).
+    target_page_id = args.page_id
+    if args.page_name:
         try:
-            download_single_page(cfg, project_uuid, project_code, args.page_id,
+            target_page_id = resolve_page_by_name(
+                cfg, project_uuid, project_code, args.page_name,
+                include_private=args.include_private,
+            )
+        except PageNameResolutionError as e:
+            print(e, file=sys.stderr)
+            return 2 if e.kind == PAGE_NAME_AMBIGUOUS else 1
+        except requests.HTTPError as e:
+            print(f"ERROR listing pages to match --page-name: "
+                  f"{e.response.status_code} {e.response.text}", file=sys.stderr)
+            return 2
+
+    # Single-page fast path. Reached via `--page-id` (explicit UUID) or
+    # via `--page-name` (resolved above). The operator named exactly one
+    # page either way — honour it regardless of access setting. The
+    # public-only filter only gates the bulk listing path below.
+    if target_page_id:
+        try:
+            download_single_page(cfg, project_uuid, project_code, target_page_id,
                                  args.output_root, dry_run=args.dry_run)
         except requests.HTTPError as e:
-            print(f"ERROR fetching page {args.page_id}: "
+            print(f"ERROR fetching page {target_page_id}: "
                   f"{e.response.status_code} {e.response.text}", file=sys.stderr)
             return 2
         return 0
