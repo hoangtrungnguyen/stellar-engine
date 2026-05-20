@@ -56,6 +56,8 @@ python3 cli/se doctor --dir .                      # validate tools, repos, gene
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
 python3 cli/se download CAPP                       # accepts short identifier; resolves to UUID via Plane API
 python3 cli/se download CAPP --page-id <uuid>      # fetch only one page (skips the project listing)
+python3 cli/se download CAPP --page-name "Foo"     # fetch by exact name (case-sensitive); exit 2 on duplicate
+# Full reference: docs/cli/se-download.md
 python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
     [--system-yaml ... --state-file ... --log-level ... --direction {push,pull,both}]
                                                    # default pull: import all Plane work items as new grava issues
@@ -132,6 +134,7 @@ python3 upload_wiki_page.py docs/notes.md
 |:---|:---|
 | [`README.md`](README.md) | End-user install + quick start |
 | [`docs/install.md`](docs/install.md) | Binary build + release flow (PyInstaller + GH Actions) |
+| [`docs/cli/se-download.md`](docs/cli/se-download.md) | `se download` — pull Plane pages to local markdown (full flag reference + recipes) |
 | [`docs/stellar-engine/strategy.md`](docs/stellar-engine/strategy.md) | System-wide design and roadmap |
 | [`docs/stellar-engine/plan.md`](docs/stellar-engine/plan.md) | Open gaps and phase-by-phase plan |
 | [`docs/ship-bug/strategy.md`](docs/ship-bug/strategy.md) | `/ship-bugfix` (fix-bug team) pipeline design |
