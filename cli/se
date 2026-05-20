@@ -1144,7 +1144,12 @@ def _load_module(name: str, file_path: Path):
 
 
 def cmd_download(args: argparse.Namespace) -> None:
-    """Invoke download_project_pages.main directly."""
+    """Invoke download_project_pages.main directly.
+
+    Default-public-only: the underlying script filters out pages whose
+    `access` field is set to 1 (private). Operators who need the older
+    "download every page" behaviour pass --include-private through.
+    """
     script = _repo_root() / "download_project_pages.py"
     if not script.exists():
         print(f"ERROR: {script} not found", file=sys.stderr)
@@ -1154,6 +1159,8 @@ def cmd_download(args: argparse.Namespace) -> None:
     argv = [args.project_id, "--output-root", args.output_root]
     if args.dry_run:
         argv.append("--dry-run")
+    if getattr(args, "include_private", False):
+        argv.append("--include-private")
     sys.exit(mod.main(argv))
 
 
@@ -1850,11 +1857,17 @@ def main() -> None:
     p_doc.add_argument("--dir", default=".", metavar="DIR")
 
     p_dl = sub.add_parser("download",
-                          help="Download Plane project pages to systems/<workspace>/<project>/")
+                          help="Download Plane project PUBLIC pages to "
+                               "systems/<workspace>/<project>/ "
+                               "(pass --include-private for everything)")
     p_dl.add_argument("project_id", help="Plane project UUID or shortcode")
     p_dl.add_argument("--output-root", default="systems", metavar="DIR",
                       help="Output root (default: systems/)")
     p_dl.add_argument("--dry-run", action="store_true", help="List without writing")
+    p_dl.add_argument("--include-private", action="store_true",
+                      dest="include_private",
+                      help="Also download private (access=1) pages. "
+                           "Default behaviour is public-pages-only.")
 
     p_gen = sub.add_parser("generate",
                            help="Run the generator chain (extract → outline → render)")
