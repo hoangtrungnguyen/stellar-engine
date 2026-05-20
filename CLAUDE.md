@@ -65,14 +65,16 @@ python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
                                                    # (agent hooks rely on this).
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
-python3 cli/se generate <source.md> --project <name>                 # offline: extract.json only
-python3 cli/se generate <source.md> --project <name> --step render   # render after manual outline.json
+python3 cli/se generate <source.md>                                  # offline: extract.json only
+                                                                     # drafts namespace = source filename stem.
+python3 cli/se generate <source.md> --step render                    # render after manual outline.json
 python3 cli/se generate --plane-project CAPP --plane-page <page-uuid>
                                                    # source from a Plane page: downloads to
                                                    # systems/<workspace>/<CAPP>/<slug>.md first,
                                                    # then runs the generator chain on it.
-                                                   # --project defaults to the Plane project code (CAPP);
-                                                   # pass it explicitly to override the drafts namespace.
+                                                   # drafts namespace defaults to the Plane project code (CAPP).
+                                                   # Pass --project <name> to override the namespace
+                                                   # (and the system H1) in any mode.
 # See docs/generator/usage.md for the full walkthrough including manual outline step.
 
 # Generate work items from a Plane spec page (dry-run first)
