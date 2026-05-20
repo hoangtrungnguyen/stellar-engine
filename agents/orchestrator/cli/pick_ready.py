@@ -8,6 +8,25 @@ Output: JSON array [{id, title, type}]  (may be [])
 Exit codes:
   0 = ok (empty array is valid)
   1 = grava command failed
+
+Algorithm:
+  qa team:
+    1. grava list -L qa-ready --json → lowercase {id, title, type, ...} shape
+    2. For each item: check pipeline_phase wisp; skip if in-flight (not "", "complete", "failed")
+    3. Collect up to --limit results
+
+  fix-bug / epic-task / task-generator:
+    1. grava ready --json --limit <10x> → [{Node: {ID, Type, Title, ...}}] (capital keys, nested)
+    2. Filter by allowed types:
+         fix-bug:        Node.Type == "bug"
+         epic-task:      Node.Type in {task, story, subtask}
+         task-generator: Node.Type == "epic"
+    3. task-generator only: extra grava show <id> --json call to check labels;
+       skip if no "tg:src:<page_id>" label (labels absent from ready output)
+    4. For each candidate: check pipeline_phase wisp; skip if in-flight
+    5. Collect up to --limit results
+
+  Output: JSON array [{id, title, type}] (may be empty [])
 """
 import argparse
 import json

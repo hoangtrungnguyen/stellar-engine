@@ -17,6 +17,35 @@ Exit codes:
   0 = ok
   1 = results file missing or malformed
   2 = write or comment failed
+
+Algorithm:
+  1. Load and validate results JSON (must have "items" list with required fields)
+     exit 1 if missing or malformed
+  2. Compute summary:
+       total, pass_count, fail_count, warn_count, skip_count
+       blocking_items = items where verdict == "FAIL"
+  3. Overall verdict:
+       any FAIL  → "fail"
+       only WARN → "warn"
+       else      → "pass"
+  4. Render Markdown report with sections:
+       # QA Report — <id>
+       Overall: PASS/FAIL/WARN | summary counts
+       ## Blocking Issues (if any FAILs)
+       ## Checklist Results (all items, grouped by section)
+  5. mkdir -p <target-repo>/docs/qa/reports/
+     Atomic write to grava-<id>-qa-report.md (tmp → rename)
+     exit 2 on write error
+  6. grava comment <id> -m "<report, capped at 4096 chars + path note>"
+     (no --file flag on grava comment — read content then pass via -m)
+  7. Write wisps:
+       qa_verdict, qa_report_path, qa_fail_count
+       qa_blocking_items = JSON string of first 10 FAIL items
+  8. Labels:
+       verdict == "pass" → grava label <id> --add qa-passed
+       else              → grava label <id> --add qa-failed
+  9. grava commit -m "qa-agent: <id> QA report (<verdict>)"
+  10. Print JSON {id, verdict, report_path, fail_count, blocking: [items]}
 """
 import argparse
 import json

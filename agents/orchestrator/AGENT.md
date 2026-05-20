@@ -217,6 +217,50 @@ Call `pick_ready.py` for each team, spawn each in its own Agent subagent.
 
 ---
 
+## Task-Generator Team Session Init
+
+Before expanding any epic, load the project's tech plan **once** at session start.
+The tech plan lives at `systems/<Name>/tech-plan.md` in stellar-engine and describes
+in-scope/out-of-scope requirements for the current development phase.
+
+```bash
+# Step 1: Resolve and load tech plan (once per session)
+PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
+# Agent: Read($PLAN_PATH)  ← load into context now
+
+# Step 2: Pick epics
+CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
+
+# Step 3: Check out-of-scope requirements
+# For each candidate epic:
+#   - Consult the tech plan (already in context)
+#   - Does the tech plan mark this epic's technical area as OUT OF SCOPE?
+#     (e.g. "Out of scope: real-time sync", "Not in this phase: payment integration")
+#   - If explicitly excluded → skip; warn operator
+#   - If no exclusion found → proceed (not all epics need to be listed in the plan)
+
+# Step 4: Expand
+python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"
+# Tech plan is already in context — use it to validate expansion intent
+```
+
+> **Tech plan format** (`systems/<Name>/tech-plan.md`):
+> ```markdown
+> # <System> Tech Plan
+> ## In Scope
+> - User authentication
+> ## Out of Scope (current phase)
+> - Real-time notifications
+> ## Epics
+> ### E1: User Auth
+> - stories: login, signup
+> ```
+> Not every epic needs to be listed. The plan is consulted primarily to detect
+> out-of-scope work, and secondarily for context during expansion.
+
+---
+
 ## On /generate
 
 ```bash
@@ -224,7 +268,10 @@ Call `pick_ready.py` for each team, spawn each in its own Agent subagent.
 python3 agents/task-generator/cli/run.py "$PROJECT_ID" "$PAGE_ID" --dry-run
 # → show preview to operator, await approval → Phase B → Phase C
 
-# Without page_id: auto-pick from epic backlog
+# Without page_id: auto-pick from epic backlog (runs session init first)
+PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
+# Agent: Read($PLAN_PATH)
 CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
 EPIC_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
 [ -n "$EPIC_ID" ] && python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"

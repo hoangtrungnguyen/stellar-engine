@@ -2,13 +2,6 @@
 """
 QA Phase 0: Resolve and load the QA checklist for an issue.
 
-Resolution order (first match wins):
-  1. --checklist <path>  (explicit)
-  2. --type cli|api|web|mobile → bundled template
-  3. grava wisp read <id> qa_checklist (if non-empty)
-  4. <target-repo>/docs/qa/default-checklist.md
-  5. agents/orchestrator/templates/qa/default-checklist.md (bundled fallback)
-
 Usage: python3 qa_load.py <id> [--target-repo <path>]
                            [--checklist <path>] [--type cli|api|web|mobile]
                            [--out <path>]
@@ -17,6 +10,23 @@ Exit codes:
   0 = ok
   1 = no checklist found at any source
   2 = read/write error
+
+Algorithm:
+  Resolution order (first match wins):
+    1. --checklist <path>  (explicit operator override)
+    2. --type cli|api|web|mobile → bundled template at
+       agents/orchestrator/templates/qa/<type>-checklist.md
+       (find stellar-engine root by walking up from __file__ until repo-map.yaml found)
+    3. grava wisp read <id> qa_checklist (if wisp non-empty and file exists)
+    4. <target-repo>/docs/qa/default-checklist.md
+    5. agents/orchestrator/templates/qa/default-checklist.md (bundled fallback)
+
+  After resolving:
+    - Read checklist content
+    - Atomic write to --out (default: <target-repo>/.grava/qa-<id>-checklist.md)
+      uses tmp file + rename for atomicity
+    - grava wisp write <id> qa_checklist <resolved_path>
+    - Print JSON {id, checklist_path, source (step number that matched), out}
 """
 import argparse
 import json
