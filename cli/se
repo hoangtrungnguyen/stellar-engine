@@ -451,10 +451,49 @@ def _install_agent_trees(
 # ── se init ───────────────────────────────────────────────────────────────────
 
 
+def _scaffold_repos_yaml(
+    base: Path,
+    created: list[str],
+    preserved: list[str],
+) -> None:
+    """Scaffold `<base>/repos.yaml` while ALWAYS preserving existing repo entries.
+
+    Three cases:
+      1. No file → write the fresh template (empty `repos: {}`). Reported
+         as `created`.
+      2. File exists with zero repo entries → leave untouched, reported
+         as `preserved` (empty).
+      3. File exists with N repo entries → leave untouched, reported as
+         `preserved <path> (N repos kept)` so the operator sees the
+         exact count and knows nothing was lost.
+
+    HARD LIMIT — DO NOT BREAK:
+      Operator-added repos in repos.yaml MUST survive every `se init`
+      invocation, including any future `--force` flags. The fleet-runtime
+      registry is the source of truth for what's registered; init is a
+      scaffold, not a reset. If you need a "reset repos.yaml" command
+      add it as a separate subcommand (e.g. `se repos clear`) so the
+      destructive action is named explicitly.
+    """
+    path = base / "repos.yaml"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_REPOS_YAML)
+        created.append(str(path))
+        return
+
+    existing = _load_repos(base)
+    if existing:
+        preserved.append(f"{path} ({len(existing)} repos kept)")
+    else:
+        preserved.append(str(path))
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     base = Path(args.dir).resolve()
     created: list[str] = []
     skipped: list[str] = []
+    preserved: list[str] = []
 
     def _scaffold_file(path: Path, content: str) -> None:
         if path.exists():
@@ -471,7 +510,15 @@ def cmd_init(args: argparse.Namespace) -> None:
             path.mkdir(parents=True)
             created.append(str(path) + "/")
 
-    _scaffold_file(base / "repos.yaml", _REPOS_YAML)
+    # repos.yaml is special: it's the fleet runtime registry (operator-
+    # populated via `se repos add`). `se init` must NEVER clobber an
+    # existing repos.yaml. Use the dedicated helper so the preservation
+    # is visible in the summary as `preserved <path> (N repos kept)`.
+    # NB: even if future code adds a global --force flag, this helper
+    # must keep the existing entries intact — see hard-limit comment
+    # on _scaffold_repos_yaml.
+    _scaffold_repos_yaml(base, created, preserved)
+
     _scaffold_file(base / "policies" / "default.yaml", _POLICIES_YAML)
     _scaffold_file(base / ".env.example", _ENV_EXAMPLE)
     _scaffold_file(base / "docs" / "env-setup.md", _ENV_SETUP_MD)
@@ -512,9 +559,11 @@ def cmd_init(args: argparse.Namespace) -> None:
                 print(f"           {m}")
 
     for p in created:
-        print(f"  created  {p}")
+        print(f"  created    {p}")
+    for p in preserved:
+        print(f"  preserved  {p}")
     for p in skipped:
-        print(f"  exists   {p} (skipped)")
+        print(f"  exists     {p} (skipped)")
 
     if not created:
         print("Nothing to do — all artifacts already exist.")
