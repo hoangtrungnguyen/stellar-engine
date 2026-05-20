@@ -1231,16 +1231,15 @@ def cmd_generate(args: argparse.Namespace) -> None:
     # we download into systems/<workspace>/<project>/<slug>.md first.
     source, project_code = _resolve_plane_source(args)
 
-    # Default the drafts namespace to the Plane project code when the
-    # operator didn't pass --project explicitly. So `se generate
-    # --plane-project CAPP --plane-page <uuid>` writes drafts under
-    # `drafts/CAPP/runs/<RID>/` without needing a duplicate --project flag.
-    project = args.project or project_code
+    # Derive the drafts namespace + system H1 unless the operator
+    # overrode it. Plane mode falls back to the resolved project code
+    # (e.g. CAPP); local mode falls back to the source filename stem.
+    project = args.project or project_code or Path(source).stem
     if not project:
-        print(
-            "ERROR: --project is required when sourcing from a local file.",
-            file=sys.stderr,
-        )
+        # Pathological case: empty string source. Surface a clear error
+        # instead of letting run.py choke on `--project ""`.
+        print("ERROR: cannot derive a project name from the source.",
+              file=sys.stderr)
         sys.exit(1)
 
     mod = _load_module("generator_run", script)
@@ -1944,10 +1943,10 @@ def main() -> None:
                             "--plane-project; downloaded to "
                             "systems/<workspace>/<project>/<slug>.md.")
     p_gen.add_argument("--project", default=None,
-                       help="Project / system name (drafts subdir). Required "
-                            "with a local source path; defaults to the "
-                            "resolved Plane project code (e.g. CAPP) when "
-                            "using --plane-project.")
+                       help="Override the drafts namespace + system H1. "
+                            "Defaults to the source filename stem in local "
+                            "mode, or the Plane project code (e.g. CAPP) "
+                            "in --plane-project mode.")
     p_gen.add_argument("--drafts-root", default=None, metavar="DIR",
                        help="Drafts root (default: drafts/)")
     p_gen.add_argument("--system-name", default=None,

@@ -12,21 +12,25 @@ Sub-agent that converts one markdown source file into reviewable spec drafts. Th
 ## Inputs
 
 - `source` — path to a markdown file (PDF / URL / transcript / codebase frontends are deferred).
-- `--project <name>` — system / project name; used as the subdirectory under `drafts/` and as the rendered H1 unless `--system-name` overrides it.
+- `--project <name>` — **optional** override for the subdirectory under `drafts/` and the rendered H1. Defaults to the source filename stem (local mode) or the resolved Plane project code (`--plane-project` mode).
+- Plane source: `--plane-project <code|uuid> --plane-page <uuid>` — download a Plane page into `systems/<workspace>/<project>/<slug>.md` and use it as the source. The page is re-downloaded on every run (overwriting the local file).
 - Optional: `--system-name`, `--drafts-root`, `--run-id`, mode flags (`--dry-run` | `--no-llm` | `--llm`), `--step extract|outline|render`.
 
 ## Operator entry point
 
 ```bash
-se generate <source.md> --project <name>                       # default: offline, stops after extract
-se generate <source.md> --project <name> --dry-run             # same as default; extract only, no render
-se generate <source.md> --project <name> --no-llm              # explicit offline; extract only
-se generate <source.md> --project <name> --llm                 # Phase D — currently refused with pointer
-se generate <source.md> --project <name> --step extract        # single-step
-se generate <source.md> --project <name> --step outline        # no-op today (LLM deferred)
-se generate <source.md> --project <name> --step render         # render only, requires outline.json
-se generate <source.md> --project <name> --system-name "Foo"   # override H1
-se generate <source.md> --project <name> --run-id RID-1        # override timestamp run id
+se generate <source.md>                       # default: offline, stops after extract
+se generate <source.md> --dry-run             # same as default; extract only, no render
+se generate <source.md> --no-llm              # explicit offline; extract only
+se generate <source.md> --llm                 # Phase D — currently refused with pointer
+se generate <source.md> --step extract        # single-step
+se generate <source.md> --step outline        # no-op today (LLM deferred)
+se generate <source.md> --step render         # render only, requires outline.json
+se generate <source.md> --system-name "Foo"   # override H1
+se generate <source.md> --run-id RID-1        # override timestamp run id
+se generate <source.md> --project FOO         # override drafts namespace + H1
+se generate --plane-project CAPP --plane-page <uuid>
+                                              # source from a Plane page; drafts namespace = CAPP
 ```
 
 `cli/run.py` is the internal one-shot orchestrator; `se generate` wraps it. Both accept the same flags.
@@ -151,7 +155,7 @@ undetected, so review the rendered draft before promoting.
 
 `--llm` will fail loudly with `LLMNotEnabled` until Phase D lands. The interim outline path is manual via a Claude Code session:
 
-1. Run `se generate <source.md> --project <name> --no-llm` (or `--dry-run`) — writes `extract.json`.
+1. Run `se generate <source.md> --no-llm` (or `--dry-run`) — writes `extract.json`. (Pass `--project <name>` to override the drafts namespace if the filename stem isn't what you want.)
 2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].depends_on` (folded from `extract.json` `epic_dependencies` — see [Epic dependencies](#epic-dependencies) above), `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
 3. Save the produced `outline.json` into `drafts/<project>/runs/<RID>/outline.json`.
 4. Re-run with `--step render` (or rerun the full chain; the orchestrator picks up the existing `outline.json`).
