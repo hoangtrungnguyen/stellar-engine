@@ -97,6 +97,86 @@ It:
 
 The installer respects `SE_REPO=<owner/repo>` so a fork can host its own builds.
 
+### `--from-source`: install from HEAD without a release
+
+Two extra flags let the installer skip GitHub Releases entirely and build the binary from a git checkout on the host:
+
+```bash
+# Latest commit on main:
+curl -fsSL https://raw.githubusercontent.com/hoangtrungnguyen/stellar-engine/main/scripts/install.sh \
+  | bash -s -- --from-source
+
+# Specific branch (unreleased PR, fork, etc.):
+curl -fsSL .../install.sh | bash -s -- --from-source --branch claude/some-feature
+
+# Combine with --bin-dir / --prefix as usual:
+curl -fsSL .../install.sh | bash -s -- --from-source --bin-dir /opt/homebrew/bin
+```
+
+Flow:
+
+1. `git clone --depth 1 --branch <name> https://github.com/<repo>.git` into a temp dir.
+2. Runs `bash scripts/build.sh --version from-source-<branch>-<short-sha>` inside the clone (build.sh auto-installs PyInstaller into `.build-venv/`).
+3. Copies the built `dist/se-<os>-<arch>/se` into the resolved bin dir.
+4. Cleans up the temp clone via the script's `trap … EXIT`.
+
+The version stamp embeds the resolved branch + short SHA so `se --version` shows exactly what landed:
+
+```
+$ se --version
+se from-source-main-d2f60be (commit d2f60be, built 2026-05-20T14:03:45Z)
+```
+
+#### Trade-offs
+
+| | Default (`install.sh`) | `--from-source` |
+|---|---|---|
+| Source | Latest tagged GitHub release | Latest commit on a branch (default `main`) |
+| Network | GitHub Releases CDN | `git clone` over HTTPS |
+| Host build chain | not needed | needs `python3` (3.10+), `pip`, `git` |
+| Speed | ~1 second | ~1–2 minutes |
+| `sha256` verify | yes (against published `.sha256`) | no (trust the git repo + host build chain) |
+| Use case | production install from a tagged release | unreleased features, forks, firewalled hosts |
+
+#### Constraints
+
+- **Snapshot, not live.** The binary is frozen at clone time; subsequent commits on the branch don't reach you until you reinstall.
+- **Shallow clone (`--depth 1`).** No history; `git describe` inside the binary's working dir won't see other tags. Doesn't affect the binary itself.
+- **`--branch` only valid with `--from-source`.** Passing `--branch <name>` without `--from-source` exits with `✗ --branch only valid with --from-source` — silent ignore would mask a misconfigured install command.
+- **Unsigned.** Release-mode installs verify a published `.sha256` from the release page. `--from-source` skips that — you trust the git repo + the host's build chain. Use `--version <tag>` (release mode) when you need cryptographic verification.
+
+### `install-local.sh`: companion for in-checkout iteration
+
+[`scripts/install-local.sh`](../scripts/install-local.sh) is the "I already ran `build.sh`, just install the artifact" helper. No network, no clone — copies `dist/se-<os>-<arch>/se` straight into the bin dir.
+
+```bash
+bash scripts/build.sh                    # produce dist/se-<os>-<arch>/se
+bash scripts/install-local.sh            # copy to $HOME/.local/bin/se
+bash scripts/install-local.sh --force    # overwrite existing se
+bash scripts/install-local.sh --dry-run  # preview
+bash scripts/install-local.sh --bin-dir /opt/homebrew/bin
+bash scripts/install-local.sh --artifact /path/to/custom/se
+```
+
+Auto-detects OS+arch (darwin/linux × arm64/x64) to find the right `dist/` subdir. Exits:
+
+- `0` — installed (or would install, with `--dry-run`)
+- `1` — usage / arg error
+- `2` — build artifact missing (run `scripts/build.sh` first)
+- `3` — refused to overwrite an existing `se` (pass `--force`)
+
+Use this in a tight iteration loop where you're hacking `cli/se` and want fast feedback. Use `install.sh --from-source` when you want a one-liner that works on someone else's machine.
+
+### Choosing between the three paths
+
+| You want… | Command |
+|---|---|
+| Production install from the latest tagged release | `curl … install.sh \| bash` |
+| HEAD of `main` (latest unreleased code) | `curl … install.sh \| bash -s -- --from-source` |
+| An unreleased PR branch | `curl … install.sh \| bash -s -- --from-source --branch <name>` |
+| Already built locally, just put it on PATH | `bash scripts/install-local.sh` |
+| Pin to a specific tag for reproducibility | `curl … install.sh \| bash -s -- --version v0.0.6+8` |
+
 ## Refactoring notes for binary friendliness
 
 The original `cli/se` shelled out via `subprocess.call([sys.executable, str(script), …])`. That pattern is fine in dev but breaks under PyInstaller — `sys.executable` becomes the bundled binary, which only knows how to run its own entry script.
