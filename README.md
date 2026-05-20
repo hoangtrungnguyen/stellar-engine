@@ -50,7 +50,43 @@ se --help
 
 Each tarball ships with a `.sha256` companion file.
 
-### Build from source
+### Install latest HEAD (curl-build, no release required)
+
+Get every commit on `main` (or any branch) without waiting for a tag:
+
+```bash
+# Latest main HEAD, built from source on your host:
+curl -sL https://raw.githubusercontent.com/hoangtrungnguyen/stellar-engine/main/scripts/install.sh \
+  | bash -s -- --from-source
+
+# Specific branch (e.g. an unreleased PR):
+curl -sL https://raw.githubusercontent.com/hoangtrungnguyen/stellar-engine/main/scripts/install.sh \
+  | bash -s -- --from-source --branch claude/some-feature
+```
+
+The installer clones the repo (shallow, depth=1), runs `bash scripts/build.sh` under a private venv, and copies the resulting binary into your bin dir — same destination as the release-mode install.
+
+Host requirements: `python3` (3.10+), `pip`, `git`. Build takes ~1–2 minutes. The binary's version stamp encodes the resolved commit so `se --version` shows you exactly what landed:
+
+```
+$ se --version
+se from-source-main-d2f60be (commit d2f60be, built 2026-05-20T14:03:45Z)
+```
+
+**Trade-offs vs the default install**:
+
+| | Default (`install.sh`) | `--from-source` |
+|---|---|---|
+| Source | Latest tagged GitHub release | Latest commit on a branch |
+| Network | GitHub Releases CDN | `git clone` over HTTPS |
+| Host build chain | not needed | needs `python3`, `pip`, `git` |
+| Speed | ~1 second | ~1–2 minutes |
+| sha256 verify | yes (published with release) | no |
+| Use case | production install | unreleased features, forks, firewalled hosts |
+
+This is a snapshot — the binary doesn't auto-update. Re-run the curl one-liner whenever you want a fresh build.
+
+### Build from source (manually)
 
 Requires Python 3.10+.
 
@@ -58,7 +94,10 @@ Requires Python 3.10+.
 git clone https://github.com/hoangtrungnguyen/stellar-engine.git
 cd stellar-engine
 bash scripts/build.sh           # produces dist/se-<os>-<arch>/se
+bash scripts/install-local.sh   # copies the binary to $HOME/.local/bin
 ```
+
+`install-local.sh` is the manual-install companion to `install.sh --from-source`: same destination semantics, but skips the clone + build and just copies an already-built artifact onto your PATH. Useful when iterating on `cli/se` locally.
 
 ## Quick start
 
