@@ -71,6 +71,8 @@ se generate --plane-project CAPP --plane-page <page-uuid>
                                               # …or source directly from a Plane page
 se download <plane-project-uuid>              # pull all Plane pages → systems/
 se download CAPP --page-id <page-uuid>        # single page; project code resolves via API
+se download CAPP --page-name "Architecture"   # single page by name (case-sensitive)
+# Full reference: docs/cli/se-download.md
 se taskgen <project-uuid> <page-uuid> --yes   # Plane page → Plane issues + Grava mirror
 # Switch Plane workspace via profile: drop ~/.config/plane/<name>.json then:
 se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox
