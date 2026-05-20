@@ -1528,14 +1528,11 @@ _ORCH_SCRIPT_DIR = ("agents", "orchestrator", "cli")
 
 # Teams that have a Phase 0 dispatch script (an "agent") and can be looped
 # in `se o deploy --all` for real Phase 0 dispatch.
-_AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator")
+_AGENT_TEAMS: tuple[str, ...] = ("fix-bug", "qa", "task-generator", "epic-task")
 
-# Teams that can be looped in `se o deploy --all` but only produce a /ship
-# hint per issue (no `se`-side Phase 0 script — work runs inside Claude Code).
-# Each iteration calls `_orch_dispatch_phase0(epic-task, …)` which prints the
-# hint to stderr. Tracked in a separate `hinted` bucket in the batch summary
-# so the operator can distinguish "actually dispatched" from "needs Claude Code".
-_HINT_ONLY_TEAMS: tuple[str, ...] = ("epic-task",)
+# Teams that only produce a /ship hint per issue (no `se`-side Phase 0 script).
+# epic-task now has epic_task_claim.py, so this is empty.
+_HINT_ONLY_TEAMS: tuple[str, ...] = ()
 
 # Union: every team `--all --team T` will iterate. Anything outside this
 # tuple is rejected with a "not a valid batch target" message + exit 0.
@@ -1641,6 +1638,13 @@ def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
     if args.dry_run:
         argv.append("--dry-run")
     sys.exit(_orch_invoke("task_gen_expand.py", "orch_task_gen_expand", argv))
+
+
+def cmd_orchestrator_epic_task_claim(args: argparse.Namespace) -> None:
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.actor:
+        argv += ["--actor", args.actor]
+    sys.exit(_orch_invoke("epic_task_claim.py", "orch_epic_task_claim", argv))
 
 
 def cmd_orchestrator_fix_bug_claim(args: argparse.Namespace) -> None:
@@ -1841,13 +1845,7 @@ def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
     elif team == "task-generator":
         script_name = "task_gen_expand.py"
     elif team == "epic-task":
-        print(
-            f"  Team 'epic-task' (task/story/subtask) currently runs via "
-            f"the /ship slash command in Claude Code — no `se` equivalent yet.\n"
-            f"  Run inside the target repo:  claude  →  /ship {issue_id}",
-            file=sys.stderr,
-        )
-        return 0
+        script_name = "epic_task_claim.py"
     else:
         print(f"ERROR: unknown team '{team}'", file=sys.stderr)
         return 1
@@ -1898,13 +1896,11 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         if team not in _BATCH_TEAMS:
             print(
                 f"Team '{team}' is not a valid batch target — no Phase 0 "
-                f"dispatch or /ship hint loop available from `se` "
+                f"dispatch available from `se` "
                 f"(valid teams: {', '.join(_BATCH_TEAMS)}).\nNothing to do.",
                 file=sys.stderr,
             )
             sys.exit(0)
-
-        hint_only = team in _HINT_ONLY_TEAMS
 
         limit = args.limit or 100
         ids = _orch_pick_ids(team, target_repo, limit)
@@ -1918,28 +1914,17 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             print(f"  hint:   inspect in-flight items with "
                   f"`se o pick --team {team} --target-repo {target_repo}` "
                   f"and `grava list` in the repo.")
-            if hint_only:
-                print(f"  note:   nothing hinted; team={team} loops emit "
-                      f"`/ship <id>` hints but require Claude Code to actually "
-                      f"ship.")
-            else:
-                print(f"  note:   nothing dispatched; no Phase 0 fired.")
+            print(f"  note:   nothing dispatched; no Phase 0 fired.")
             sys.exit(0)
 
-        verb = "hint" if hint_only else "dispatch"
-        print(f"Batch {verb}: team={team}, {len(ids)} issue(s) ready "
+        print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
               f"(limit={limit}).")
         if args.dry_run:
             for iid in ids:
-                if hint_only:
-                    print(f"  [dry-run] would print /ship hint for {iid} "
-                          f"(team={team}, runs in Claude Code)")
-                else:
-                    print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
+                print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
             sys.exit(0)
 
         dispatched: list[str] = []
-        hinted: list[str] = []
         failed: list[tuple[str, int]] = []
 
         for idx, iid in enumerate(ids, start=1):
@@ -1958,21 +1943,6 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             if routed_team != team:
                 continue
 
-            if hint_only:
-                # _orch_dispatch_phase0 prints the /ship hint for epic-task
-                # and returns 0 — call it for uniform behaviour, but bucket
-                # the result as "hinted" rather than "dispatched" so the
-                # summary clearly distinguishes the two.
-                print(f"→ Hint: {iid} (team={team}, run in Claude Code)")
-                rc = _orch_dispatch_phase0(iid, team, target_repo)
-                if rc == 0:
-                    hinted.append(iid)
-                else:
-                    failed.append((iid, rc))
-                    if args.stop_on_error:
-                        break
-                continue
-
             print(f"→ Dispatching {iid} to team={team} (Phase 0)")
             rc = _orch_dispatch_phase0(iid, team, target_repo)
             if rc == 0:
@@ -1984,21 +1954,12 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
         # Batch summary
         print(f"\n── Batch summary (team={team}) ──")
-        if hint_only:
-            print(f"  hinted:     {len(hinted)}  "
-                  f"failed: {len(failed)}  "
-                  f"of {len(ids)} candidates")
-            if hinted:
-                print(f"  next:       run each in Claude Code:")
-                for iid in hinted:
-                    print(f"                /ship {iid}")
-        else:
-            print(f"  dispatched: {len(dispatched)}  "
-                  f"failed: {len(failed)}  "
-                  f"of {len(ids)} candidates")
+        print(f"  dispatched: {len(dispatched)}  "
+              f"failed: {len(failed)}  "
+              f"of {len(ids)} candidates")
         for iid, rc in failed:
             print(f"  failed {iid}: exit={rc}")
-        if not dispatched and not hinted and not failed:
+        if not dispatched and not failed:
             # All candidates silently skipped (route mismatch).
             print(f"  note:       none of the {len(ids)} candidates routed to "
                   f"team={team}; nothing dispatched.")
@@ -2369,6 +2330,18 @@ def main() -> None:
         help="Attach to the tmux session immediately after creating it",
     )
 
+    # se orchestrator epic-task {claim}
+    p_orch_et = orch_sub.add_parser("epic-task", help="Epic-task pipeline phases")
+    et_sub = p_orch_et.add_subparsers(dest="et_cmd", metavar="PHASE")
+    et_sub.required = True
+
+    p_et_claim = et_sub.add_parser(
+        "claim", help="Phase 0: claim story/task + provision worktree + resolve tech plan"
+    )
+    p_et_claim.add_argument("id", help="Grava task/story/subtask issue ID")
+    p_et_claim.add_argument("--target-repo", default=".", metavar="PATH")
+    p_et_claim.add_argument("--actor", default=None)
+
     # se orchestrator fix-bug {claim,verify,pr}
     p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")
     fb_sub = p_orch_fb.add_subparsers(dest="fb_cmd", metavar="PHASE")
@@ -2427,6 +2400,11 @@ def main() -> None:
         }
         if args.orch_cmd in orch_table:
             orch_table[args.orch_cmd](args)
+            return
+        if args.orch_cmd == "epic-task":
+            {
+                "claim": cmd_orchestrator_epic_task_claim,
+            }[args.et_cmd](args)
             return
         if args.orch_cmd == "fix-bug":
             {
