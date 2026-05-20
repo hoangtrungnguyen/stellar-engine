@@ -133,6 +133,28 @@ def list_pages(cfg: dict, project_id: str) -> list[dict]:
     return data if isinstance(data, list) else data.get("results", [])
 
 
+# Plane's page model exposes an `access` IntegerField with choices:
+#   0 = Public  (visible to every workspace member)
+#   1 = Private (visible only to creator + explicitly shared members)
+# See github.com/makeplane/plane → apps/api/plane/db/models/page.py
+#
+# Older Plane versions occasionally omit the field entirely; treat
+# missing-or-falsy as public so we don't accidentally hide content
+# when running against an older self-hosted instance.
+def is_public_page(page: dict) -> bool:
+    """Return True when a Plane page is workspace-public.
+
+    Default-safe: missing/None access is treated as public (older Plane
+    schema didn't expose the field). Operators who actually want to
+    exclude unsure-schema pages can fall back to `--include-private`
+    to opt in to the older "download everything" behaviour.
+    """
+    access = page.get("access")
+    if access is None:
+        return True
+    return access == 0
+
+
 def fetch_page(cfg: dict, project_id: str, page_id: str) -> dict:
     resp = requests.get(pages_url(cfg, project_id, page_id), headers=api_headers(cfg["token"]))
     resp.raise_for_status()
@@ -192,6 +214,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Download only this page UUID (skips listing the project)")
     parser.add_argument("--dry-run", action="store_true",
                         help="List pages without writing files")
+    parser.add_argument("--include-private", action="store_true",
+                        help="Also download private (access=1) pages. "
+                             "Default behaviour is public-pages-only.")
     args = parser.parse_args(argv)
 
     cfg = load_config()
@@ -201,7 +226,11 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 1
 
-    # Single-page fast path.
+    # Single-page fast path. An explicit --page-id means the operator
+    # already knows exactly what they want — we honour it regardless of
+    # the page's access setting (private pages that the API can still
+    # read get downloaded). The public-only filter only gates the
+    # listing path below.
     if args.page_id:
         try:
             download_single_page(cfg, project_uuid, project_code, args.page_id,
@@ -214,10 +243,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # Full project listing.
     try:
-        pages = list_pages(cfg, project_uuid)
+        all_pages = list_pages(cfg, project_uuid)
     except requests.HTTPError as e:
         print(f"ERROR listing pages: {e.response.status_code} {e.response.text}", file=sys.stderr)
         return 2
+
+    if args.include_private:
+        pages = all_pages
+        filter_note = "(public + private — --include-private)"
+    else:
+        pages = [p for p in all_pages if is_public_page(p)]
+        hidden = len(all_pages) - len(pages)
+        filter_note = (
+            f"(public only; skipped {hidden} private page(s) — "
+            f"pass --include-private to include them)"
+            if hidden else "(public only)"
+        )
+
+    print(f"Pages to process: {len(pages)} of {len(all_pages)} total {filter_note}")
 
     out_dir = Path(args.output_root) / cfg["workspace"] / project_code
     if not args.dry_run:
