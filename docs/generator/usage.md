@@ -47,6 +47,16 @@ This step:
 - Writes `extract.json` to the run directory.
 - Stops there. With `--no-llm`, no further steps run.
 
+### Sourcing from a Plane page
+
+If the spec lives in Plane (not on disk), pass the project short code + page UUID instead of a local path:
+
+```bash
+se generate --plane-project CAPP --plane-page <page-uuid> --project STELL --no-llm
+```
+
+This first downloads the page to `systems/<workspace>/CAPP/<page-slug>.md` (same convention as `se download`) and then feeds that file into the generator. The project code is resolved to a UUID via the Plane API, so `CAPP` works just like the UUID would. Re-run the same command to refresh from Plane — it overwrites the local file with the latest page content.
+
 **Output:**
 ```
 drafts/STELL/runs/20260516T120937Z/
