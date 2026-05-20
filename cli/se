@@ -1166,6 +1166,122 @@ def cmd_download(args: argparse.Namespace) -> None:
     sys.exit(mod.main(argv))
 
 
+# ── se pages ──────────────────────────────────────────────────────────────────
+#
+# `se pages <project>` lists every page in a Plane project. Read-only.
+#
+# Reuses the helpers in `download_project_pages.py` (load_config,
+# resolve_project, list_pages, is_public_page) by importing the module
+# in-process instead of shelling out — listing has no side effects, so
+# there's no reason to spawn a subprocess for it.
+#
+# Default = public pages only (matches `se download`). `--include-private`
+# widens the listing to private (access=1) pages. `--json` switches the
+# output from a fixed-width table to a JSON array of {id, name, access}
+# for script consumers.
+
+
+def _se_pages_format_access(page: dict) -> str:
+    """Render the access bit as `public` / `private` / `unknown`.
+
+    Older Plane schemas may omit the field — surface that as `unknown`
+    so operators can spot drift between server versions.
+    """
+    access = page.get("access")
+    if access is None:
+        return "unknown"
+    return "public" if access == 0 else "private"
+
+
+def cmd_pages(args: argparse.Namespace) -> None:
+    """`se pages <project>` — list pages in a Plane project as a table.
+
+    Output columns: ID, NAME, ACCESS. Sorted by name for stable ordering.
+    Public pages only by default; pass `--include-private` to widen.
+    Use `--json` to emit a machine-readable array instead of the table.
+    """
+    _apply_plane_profile_env(args)
+
+    project_id = args.project_id or args.project
+    if not project_id:
+        print(
+            "ERROR: pass a project as a positional arg or via --project. "
+            "Examples:\n  se pages CAPP\n  se pages --project CAPP",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    script = _repo_root() / "download_project_pages.py"
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+
+    dpp = _load_module("download_project_pages", script)
+    cfg = dpp.load_config()  # exits on its own with a clear message if creds missing
+
+    try:
+        project_uuid, project_code = dpp.resolve_project(cfg, project_id)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        all_pages = dpp.list_pages(cfg, project_uuid)
+    except Exception as exc:
+        print(f"ERROR listing pages: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    if args.include_private:
+        pages = all_pages
+        filter_note = "(public + private — --include-private)"
+    else:
+        pages = [p for p in all_pages if dpp.is_public_page(p)]
+        hidden = len(all_pages) - len(pages)
+        filter_note = (
+            f"(public only; {hidden} private hidden — pass --include-private)"
+            if hidden else "(public only)"
+        )
+
+    # Stable, predictable order: by name (case-insensitive), then id.
+    pages = sorted(pages, key=lambda p: (str(p.get("name", "")).casefold(),
+                                         str(p.get("id", ""))))
+
+    if args.json:
+        payload = [
+            {
+                "id": p.get("id"),
+                "name": p.get("name"),
+                "access": _se_pages_format_access(p),
+            }
+            for p in pages
+        ]
+        print(json.dumps(payload, indent=2))
+        sys.exit(0)
+
+    # Plain-text table. Column widths dynamic so long names don't wrap.
+    rows = [
+        (str(p.get("id", "")), str(p.get("name", "") or "<untitled>"),
+         _se_pages_format_access(p))
+        for p in pages
+    ]
+    headers = ("ID", "NAME", "ACCESS")
+    widths = [
+        max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
+        for i in range(3)
+    ]
+
+    print(f"Project: {project_code}  ({project_uuid})  workspace={cfg['workspace']}")
+    print(f"Pages:   {len(pages)} of {len(all_pages)} total {filter_note}")
+    print()
+    sep = "  "
+    fmt = sep.join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*headers))
+    print(fmt.format(*("-" * w for w in widths)))
+    for row in rows:
+        print(fmt.format(*row))
+    sys.exit(0)
+
+
 def _resolve_plane_source(args: argparse.Namespace) -> tuple[str, str | None]:
     """When --plane-project + --plane-page are set, download the page
     and return `(local_markdown_path, project_code)`. Otherwise return
@@ -1941,6 +2057,36 @@ def main() -> None:
                       help="Also download private (access=1) pages. "
                            "Default behaviour is public-pages-only.")
 
+    # ── se pages ──────────────────────────────────────────────────────────
+    # `se pages <project>` lists pages in a Plane project. Positional is
+    # the primary path; `--project` is an alias for muscle-memory parity
+    # with other commands. Either resolves to `args.project_id` /
+    # `args.project` — cmd_pages picks whichever is set.
+    p_pages = sub.add_parser(
+        "pages",
+        help="List pages in a Plane project as a table "
+             "(public-only by default; --include-private for everything)",
+    )
+    p_pages.add_argument(
+        "project_id", nargs="?", default=None,
+        help="Plane project UUID or short identifier (e.g. CAPP). "
+             "Equivalent to passing --project.",
+    )
+    p_pages.add_argument(
+        "--project", default=None, metavar="ID",
+        help="Alias for the positional argument; useful when chaining "
+             "shell commands or matching the exact syntax in docs.",
+    )
+    p_pages.add_argument(
+        "--include-private", action="store_true", dest="include_private",
+        help="Also list private (access=1) pages. Default is public only.",
+    )
+    p_pages.add_argument(
+        "--json", action="store_true",
+        help="Emit a JSON array of {id, name, access} instead of the table.",
+    )
+    _add_plane_profile_flags(p_pages)
+
     p_gen = sub.add_parser("generate",
                            help="Run the generator chain (extract → outline → render)")
     p_gen.add_argument("source", nargs="?", default=None,
@@ -2189,6 +2335,7 @@ def main() -> None:
         "repos": cmd_repos,
         "doctor": cmd_doctor,
         "download": cmd_download,
+        "pages": cmd_pages,
         "generate": cmd_generate,
         "taskgen": cmd_taskgen,
         "plane-sync": cmd_plane_sync,
