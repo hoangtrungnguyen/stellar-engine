@@ -164,7 +164,7 @@ Three practical rules:
 
 ## 5. Folding `extract.json` → `outline.json`
 
-Today's outline step is **manual** (Phase D LLM call is deferred). After `se generate <source.md> --project <name>` finishes the extract step, the run directory looks like:
+Today's outline step is **manual** (Phase D LLM call is deferred). After `se generate <source.md>` finishes the extract step, the run directory looks like:
 
 ```
 drafts/<name>/runs/<RID>/
@@ -199,7 +199,7 @@ For each edge `{from: A, to: B}`, add `A` to `Epic(title=B).depends_on` when han
 }
 ```
 
-Then run `se generate <source.md> --project <name> --step render` to emit the markdown drafts. Each draft carries a `> Depends on: …` blockquote under its H2:
+Then run `se generate <source.md> --step render` to emit the markdown drafts. Each draft carries a `> Depends on: …` blockquote under its H2:
 
 ```markdown
 ## Cancellations
@@ -360,10 +360,10 @@ graph TD
 Then:
 
 ```bash
-se generate spec.md --project DEMO
+se generate spec.md
 jq .epic_dependencies drafts/DEMO/runs/*/extract.json   # sanity check
 # Hand-edit outline.json, populate each Epic.depends_on from the edges
-se generate spec.md --project DEMO --step render
+se generate spec.md --step render
 grep -A1 "^## " drafts/DEMO/runs/*/drafts/*.md          # confirm `> Depends on:` lines
 se taskgen <project-uuid> <page-uuid> --dry-run         # confirm `unresolved=0`
 se taskgen <project-uuid> <page-uuid> --yes             # write Plane + grava

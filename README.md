@@ -66,8 +66,11 @@ bash scripts/build.sh           # produces dist/se-<os>-<arch>/se
 se --version                                  # report which build you have
 se --help
 se doctor --dir .                             # validate environment
-se generate path/to/spec.md --project DEMO    # turn markdown into spec drafts
-se download <plane-project-uuid>              # pull Plane pages → systems/
+se generate path/to/spec.md                   # turn markdown into spec drafts
+se generate --plane-project CAPP --plane-page <page-uuid>
+                                              # …or source directly from a Plane page
+se download <plane-project-uuid>              # pull all Plane pages → systems/
+se download CAPP --page-id <page-uuid>        # single page; project code resolves via API
 se taskgen <project-uuid> <page-uuid> --yes   # Plane page → Plane issues + Grava mirror
 # Switch Plane workspace via profile: drop ~/.config/plane/<name>.json then:
 se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox

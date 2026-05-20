@@ -38,14 +38,24 @@ Steps 1–3 are the **Generator agent** (this doc). Step 4 is a manual file copy
 ## Step 1 — Extract: markdown → IR
 
 ```bash
-se generate path/to/spec.md --project STELL --no-llm
+se generate path/to/spec.md --no-llm
 ```
 
 This step:
-- Creates `drafts/STELL/runs/<RID>/` where `<RID>` is a UTC timestamp (override with `--run-id`).
+- Creates `drafts/<project>/runs/<RID>/` where `<RID>` is a UTC timestamp (override with `--run-id`). `<project>` defaults to the source filename stem (`spec` for `spec.md`); pass `--project STELL` to override.
 - Parses the source markdown into a `Section` tree (H1/H2/H3/H4 + paragraphs / lists / code / tables).
 - Writes `extract.json` to the run directory.
 - Stops there. With `--no-llm`, no further steps run.
+
+### Sourcing from a Plane page
+
+If the spec lives in Plane (not on disk), pass the project short code + page UUID instead of a local path:
+
+```bash
+se generate --plane-project CAPP --plane-page <page-uuid> --no-llm
+```
+
+This first downloads the page to `systems/<workspace>/CAPP/<page-slug>.md` (same convention as `se download`) and then feeds that file into the generator. The drafts namespace defaults to the Plane project code (`CAPP`), so drafts land at `drafts/CAPP/runs/<RID>/`. Pass `--project DEMO` explicitly to override. The project code is resolved to a UUID via the Plane API, so `CAPP` works just like the UUID would. Re-run the same command to refresh from Plane — it overwrites the local file with the latest page content.
 
 **Output:**
 ```
@@ -128,7 +138,7 @@ Phase D (automated LLM call via the Anthropic SDK) is deferred until API key bud
 ## Step 3 — Render: outline → markdown drafts
 
 ```bash
-se generate path/to/spec.md --project STELL --step render --system-name "Stellar Sandbox Demo"
+se generate path/to/spec.md --step render --system-name "Stellar Sandbox Demo"
 ```
 
 This step:
@@ -226,12 +236,14 @@ For Step 5: re-upload the same promoted file. `upload_project_pages.py` uses the
 
 | Intent | Command |
 |---|---|
-| Just look at the IR | `se generate spec.md --project FOO --dry-run` |
-| Run only extract | `se generate spec.md --project FOO --step extract` |
-| Render against a pre-placed outline | `se generate spec.md --project FOO --step render` |
-| Use a stable run id | `se generate spec.md --project FOO --run-id RID-1` |
-| Override the H1 system name | `se generate spec.md --project FOO --system-name "My System"` |
-| Write to a custom drafts root | `se generate spec.md --project FOO --drafts-root /tmp/work` |
+| Just look at the IR | `se generate spec.md --dry-run` |
+| Run only extract | `se generate spec.md --step extract` |
+| Render against a pre-placed outline | `se generate spec.md --step render` |
+| Use a stable run id | `se generate spec.md --run-id RID-1` |
+| Override the drafts namespace | `se generate spec.md --project FOO` |
+| Override the H1 system name | `se generate spec.md --system-name "My System"` |
+| Write to a custom drafts root | `se generate spec.md --drafts-root /tmp/work` |
+| Source from a Plane page | `se generate --plane-project CAPP --plane-page <uuid>` |
 
 `--llm` is reserved for Phase D and currently exits 1 with a Phase D pointer.
 

@@ -54,6 +54,8 @@ python3 cli/se repos                               # list configured repos (bare
 python3 cli/se repos add <name> --path <abs-path>  # register repo + `grava init` if .grava absent
 python3 cli/se doctor --dir .                      # validate tools, repos, generator, .env, drafts/
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
+python3 cli/se download CAPP                       # accepts short identifier; resolves to UUID via Plane API
+python3 cli/se download CAPP --page-id <uuid>      # fetch only one page (skips the project listing)
 python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
     [--system-yaml ... --state-file ... --log-level ... --direction {push,pull,both}]
                                                    # default pull: import all Plane work items as new grava issues
@@ -63,8 +65,16 @@ python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
                                                    # (agent hooks rely on this).
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
-python3 cli/se generate <source.md> --project <name>                 # offline: extract.json only
-python3 cli/se generate <source.md> --project <name> --step render   # render after manual outline.json
+python3 cli/se generate <source.md>                                  # offline: extract.json only
+                                                                     # drafts namespace = source filename stem.
+python3 cli/se generate <source.md> --step render                    # render after manual outline.json
+python3 cli/se generate --plane-project CAPP --plane-page <page-uuid>
+                                                   # source from a Plane page: downloads to
+                                                   # systems/<workspace>/<CAPP>/<slug>.md first,
+                                                   # then runs the generator chain on it.
+                                                   # drafts namespace defaults to the Plane project code (CAPP).
+                                                   # Pass --project <name> to override the namespace
+                                                   # (and the system H1) in any mode.
 # See docs/generator/usage.md for the full walkthrough including manual outline step.
 
 # Generate work items from a Plane spec page (dry-run first)

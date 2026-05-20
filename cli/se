@@ -1152,9 +1152,63 @@ def cmd_download(args: argparse.Namespace) -> None:
 
     mod = _load_module("download_project_pages", script)
     argv = [args.project_id, "--output-root", args.output_root]
+    if getattr(args, "page_id", None):
+        argv += ["--page-id", args.page_id]
     if args.dry_run:
         argv.append("--dry-run")
     sys.exit(mod.main(argv))
+
+
+def _resolve_plane_source(args: argparse.Namespace) -> tuple[str, str | None]:
+    """When --plane-project + --plane-page are set, download the page
+    and return `(local_markdown_path, project_code)`. Otherwise return
+    `(args.source, None)`.
+
+    The returned `project_code` is the Plane short identifier (e.g.
+    "CAPP"); the caller may use it to default the drafts namespace
+    (`args.project`) when the operator didn't pass `--project`.
+
+    Validates flag combinations and exits with a clear message on
+    misuse before invoking the generator pipeline.
+    """
+    has_plane = bool(args.plane_project) and bool(args.plane_page)
+    has_any_plane = bool(args.plane_project) or bool(args.plane_page)
+    if has_any_plane and not has_plane:
+        print(
+            "ERROR: --plane-project and --plane-page must be used together.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.source and has_plane:
+        print(
+            "ERROR: pass either a local source path OR "
+            "--plane-project + --plane-page, not both.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not args.source and not has_plane:
+        print(
+            "ERROR: need a source — pass a markdown path or "
+            "--plane-project <code> --plane-page <uuid>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not has_plane:
+        return args.source, None
+
+    # Plane mode — fetch the single page via download_project_pages.
+    script = _repo_root() / "download_project_pages.py"
+    if not script.exists():
+        print(f"ERROR: {script} not found", file=sys.stderr)
+        sys.exit(1)
+    dl = _load_module("download_project_pages", script)
+    cfg = dl.load_config()
+    project_uuid, project_code = dl.resolve_project(cfg, args.plane_project)
+    out_path = dl.download_single_page(
+        cfg, project_uuid, project_code, args.plane_page,
+        output_root="systems",
+    )
+    return str(out_path), project_code
 
 
 # ── se generate ───────────────────────────────────────────────────────────────
@@ -1173,8 +1227,23 @@ def cmd_generate(args: argparse.Namespace) -> None:
     if str(agents_dir) not in sys.path:
         sys.path.insert(0, str(agents_dir))
 
+    # Resolve source — either a local markdown path or a Plane page that
+    # we download into systems/<workspace>/<project>/<slug>.md first.
+    source, project_code = _resolve_plane_source(args)
+
+    # Derive the drafts namespace + system H1 unless the operator
+    # overrode it. Plane mode falls back to the resolved project code
+    # (e.g. CAPP); local mode falls back to the source filename stem.
+    project = args.project or project_code or Path(source).stem
+    if not project:
+        # Pathological case: empty string source. Surface a clear error
+        # instead of letting run.py choke on `--project ""`.
+        print("ERROR: cannot derive a project name from the source.",
+              file=sys.stderr)
+        sys.exit(1)
+
     mod = _load_module("generator_run", script)
-    argv = [args.source, "--project", args.project]
+    argv = [source, "--project", project]
     if args.drafts_root:
         argv += ["--drafts-root", args.drafts_root]
     if args.system_name:
@@ -1851,16 +1920,33 @@ def main() -> None:
 
     p_dl = sub.add_parser("download",
                           help="Download Plane project pages to systems/<workspace>/<project>/")
-    p_dl.add_argument("project_id", help="Plane project UUID or shortcode")
+    p_dl.add_argument("project_id",
+                      help="Plane project UUID or short identifier (e.g. CAPP)")
     p_dl.add_argument("--output-root", default="systems", metavar="DIR",
                       help="Output root (default: systems/)")
+    p_dl.add_argument("--page-id", default=None,
+                      help="Download only this page UUID (skip listing the project)")
     p_dl.add_argument("--dry-run", action="store_true", help="List without writing")
 
     p_gen = sub.add_parser("generate",
                            help="Run the generator chain (extract → outline → render)")
-    p_gen.add_argument("source", help="Path to source document (markdown today)")
-    p_gen.add_argument("--project", required=True,
-                       help="Project / system name (drafts subdir)")
+    p_gen.add_argument("source", nargs="?", default=None,
+                       help="Path to source document (markdown). Omit when "
+                            "using --plane-project + --plane-page.")
+    p_gen.add_argument("--plane-project", default=None, dest="plane_project",
+                       metavar="CODE_OR_UUID",
+                       help="Pull source from Plane: project UUID or short "
+                            "identifier (e.g. CAPP). Requires --plane-page.")
+    p_gen.add_argument("--plane-page", default=None, dest="plane_page",
+                       metavar="PAGE_UUID",
+                       help="Plane page UUID to use as source. Pairs with "
+                            "--plane-project; downloaded to "
+                            "systems/<workspace>/<project>/<slug>.md.")
+    p_gen.add_argument("--project", default=None,
+                       help="Override the drafts namespace + system H1. "
+                            "Defaults to the source filename stem in local "
+                            "mode, or the Plane project code (e.g. CAPP) "
+                            "in --plane-project mode.")
     p_gen.add_argument("--drafts-root", default=None, metavar="DIR",
                        help="Drafts root (default: drafts/)")
     p_gen.add_argument("--system-name", default=None,
