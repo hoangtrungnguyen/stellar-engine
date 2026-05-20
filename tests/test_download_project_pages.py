@@ -162,6 +162,125 @@ def test_download_single_page_writes_to_short_code_folder(tmp_path, monkeypatch,
     assert "# My Plan" in content
 
 
+# ── resolve_page_by_name ──────────────────────────────────────────────────────
+
+
+def _pages_for_name_tests() -> list[dict]:
+    """Mixed public / private pages with one unique name, one duplicate
+    name, and one private-only name — covers every branch of
+    `resolve_page_by_name`."""
+    return [
+        # Unique public page
+        {"id": "page-unique-pub", "name": "Architecture", "access": 0},
+        # Duplicate name (twice, both public)
+        {"id": "page-dup-1", "name": "Roadmap", "access": 0},
+        {"id": "page-dup-2", "name": "Roadmap", "access": 0},
+        # Private-only name — invisible by default, visible with include-private
+        {"id": "page-private-secret", "name": "Internal Plan", "access": 1},
+        # Public + private with same name — collide only when --include-private
+        {"id": "page-mixed-pub", "name": "Backlog", "access": 0},
+        {"id": "page-mixed-priv", "name": "Backlog", "access": 1},
+    ]
+
+
+def _patch_list_pages(monkeypatch, dpp, pages):
+    monkeypatch.setattr(dpp, "list_pages", lambda c, p: pages)
+
+
+def test_resolve_page_by_name_unique_match(monkeypatch, dpp, cfg):
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    pid = dpp.resolve_page_by_name(
+        cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+        "Architecture", include_private=False,
+    )
+    assert pid == "page-unique-pub"
+
+
+def test_resolve_page_by_name_no_match_raises_not_found(monkeypatch, dpp, cfg):
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    with pytest.raises(dpp.PageNameResolutionError) as exc:
+        dpp.resolve_page_by_name(
+            cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+            "Nonexistent", include_private=False,
+        )
+    assert exc.value.kind == dpp.PAGE_NAME_NOT_FOUND
+    assert "no page named" in str(exc.value)
+    assert "Nonexistent" in str(exc.value)
+
+
+def test_resolve_page_by_name_case_sensitive(monkeypatch, dpp, cfg):
+    """`architecture` (lowercase) must NOT match `Architecture` — the
+    spec calls for exact, case-sensitive matching so duplicate detection
+    stays predictable."""
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    with pytest.raises(dpp.PageNameResolutionError) as exc:
+        dpp.resolve_page_by_name(
+            cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+            "architecture", include_private=False,
+        )
+    assert exc.value.kind == dpp.PAGE_NAME_NOT_FOUND
+
+
+def test_resolve_page_by_name_ambiguous(monkeypatch, dpp, cfg):
+    """Duplicate name → stops with `PAGE_NAME_AMBIGUOUS` so the operator
+    sees the count and is told to switch to --page-id."""
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    with pytest.raises(dpp.PageNameResolutionError) as exc:
+        dpp.resolve_page_by_name(
+            cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+            "Roadmap", include_private=False,
+        )
+    assert exc.value.kind == dpp.PAGE_NAME_AMBIGUOUS
+    assert "2 pages named" in str(exc.value)
+    assert "--page-id" in str(exc.value)
+
+
+def test_resolve_page_by_name_private_hidden_by_default(monkeypatch, dpp, cfg):
+    """A private-only name (`Internal Plan`) is invisible unless the
+    operator passes --include-private. The not-found message hints at
+    this so the operator knows why the match failed."""
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    with pytest.raises(dpp.PageNameResolutionError) as exc:
+        dpp.resolve_page_by_name(
+            cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+            "Internal Plan", include_private=False,
+        )
+    assert exc.value.kind == dpp.PAGE_NAME_NOT_FOUND
+    assert "--include-private" in str(exc.value)
+
+
+def test_resolve_page_by_name_private_included_returns_match(monkeypatch, dpp, cfg):
+    """With --include-private, the private-only page resolves."""
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+    pid = dpp.resolve_page_by_name(
+        cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+        "Internal Plan", include_private=True,
+    )
+    assert pid == "page-private-secret"
+
+
+def test_resolve_page_by_name_collision_only_when_private_included(
+    monkeypatch, dpp, cfg,
+):
+    """`Backlog` has a public + private collision. The public-only
+    default sees just one match (public) and resolves cleanly. With
+    --include-private both are visible → ambiguous."""
+    _patch_list_pages(monkeypatch, dpp, _pages_for_name_tests())
+
+    pid = dpp.resolve_page_by_name(
+        cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+        "Backlog", include_private=False,
+    )
+    assert pid == "page-mixed-pub"
+
+    with pytest.raises(dpp.PageNameResolutionError) as exc:
+        dpp.resolve_page_by_name(
+            cfg, "11111111-1111-1111-1111-111111111111", "CAPP",
+            "Backlog", include_private=True,
+        )
+    assert exc.value.kind == dpp.PAGE_NAME_AMBIGUOUS
+
+
 # ── _UUID_RE sanity ───────────────────────────────────────────────────────────
 
 

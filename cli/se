@@ -1159,6 +1159,8 @@ def cmd_download(args: argparse.Namespace) -> None:
     argv = [args.project_id, "--output-root", args.output_root]
     if getattr(args, "page_id", None):
         argv += ["--page-id", args.page_id]
+    if getattr(args, "page_name", None):
+        argv += ["--page-name", args.page_name]
     if args.dry_run:
         argv.append("--dry-run")
     if getattr(args, "include_private", False):
@@ -1933,8 +1935,17 @@ def main() -> None:
                       help="Plane project UUID or short identifier (e.g. CAPP)")
     p_dl.add_argument("--output-root", default="systems", metavar="DIR",
                       help="Output root (default: systems/)")
-    p_dl.add_argument("--page-id", default=None,
-                      help="Download only this page UUID (skip listing the project)")
+    # `--page-id` and `--page-name` are alternative ways to point at one
+    # specific page. Mutually exclusive so the operator can't accidentally
+    # pass both — pick the UUID path (precise) or the name path (friendly).
+    page_target = p_dl.add_mutually_exclusive_group()
+    page_target.add_argument("--page-id", default=None,
+                             help="Download only this page UUID (skip listing the project)")
+    page_target.add_argument("--page-name", default=None,
+                             help="Download only the page with this exact "
+                                  "(case-sensitive) name. Stops with exit 2 "
+                                  "if multiple pages share the name; "
+                                  "use --page-id then.")
     p_dl.add_argument("--dry-run", action="store_true", help="List without writing")
     p_dl.add_argument("--include-private", action="store_true",
                       dest="include_private",
