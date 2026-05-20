@@ -9,6 +9,28 @@ Exit codes:
   0 = PR created (or already exists — idempotent)
   1 = preconditions not met (verify not passed, wrong phase)
   2 = pre-merge check / git push / gh pr create failed
+
+Algorithm:
+  1. Check preconditions:
+     - grava wisp read <id> self_verify_result == "pass"
+       OR pipeline_phase == "coding_complete"
+     - Else: exit 1 "verify not passed"
+  2. Idempotency: if pipeline_phase in (pr_created, pr_awaiting_merge) → exit 0
+  3. Run <target-repo>/scripts/pre-merge-check.sh (skip gracefully if absent)
+     exit 2 if check returns non-zero
+  4. git push -u origin grava/<id> from .worktree/<id>/
+     exit 2 on failure
+  5. gh pr create --title <title> --body <body> --base main --head grava/<id>
+     [--draft if --draft]
+     Parse PR URL from stdout via regex; get PR number via gh pr view --json
+  6. grava wisp write <id> pr_url <url>
+     grava wisp write <id> pr_number <number>
+     grava wisp write <id> pr_awaiting_merge_since <unix-timestamp>
+  7. grava signal PR_CREATED --issue <id> --payload <url> --actor <actor>
+     → pipeline_phase=pr_created
+  8. grava label <id> --add pr-created
+  9. grava commit -m "fix-bug: <id> PR created at <url>"
+  10. Print JSON {id, pr_url, pr_number}
 """
 import argparse
 import json

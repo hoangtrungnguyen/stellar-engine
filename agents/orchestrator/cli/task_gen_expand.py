@@ -13,6 +13,26 @@ Exit codes:
   1 = cannot resolve page_id or project_id
   2 = operator declined
   pass-through: task-generator exit codes (5=partial, 6=rollback, 7=dep cycle)
+
+Algorithm:
+  1. grava show <epic-id> --json → parse labels list
+  2. Extract page_id from "tg:src:<page_id>" label; exit 1 if absent
+  3. Resolve project_id:
+     a. grava wisp read <epic-id> plane_project_id  (prefer explicit wisp)
+     b. Walk up from __file__ to find stellar_root (repo-map.yaml present)
+        Read repo-map.yaml + systems/*/system.yaml projects dicts
+        Match target_repo basename/realpath → project UUID
+     c. Exit 1 with guidance if still unresolved
+  4. Print: "Found Plane spec: project=<id> page=<id>" + proposed command
+  5. If NOT --dry-run: prompt operator "Proceed? [yes/no]"; exit 2 if declined
+  6. Delegate: python3 agents/task-generator/cli/run.py <project_id> <page_id>
+               [--dry-run] [--target-repo <path>]
+     Surface stdout/stderr unchanged (task-generator manages its own approval gate)
+  7. Print JSON {epic_id, page_id, project_id, task_gen_exit_code}
+  8. Return task-generator's exit code (5/6/7 pass through)
+
+Note: two approval gates exist — this script's gate (step 5) and task-generator's
+own gate (before Phase B Plane writes). Both must be cleared.
 """
 import argparse
 import json

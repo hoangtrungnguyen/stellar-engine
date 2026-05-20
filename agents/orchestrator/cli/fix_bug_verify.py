@@ -10,6 +10,27 @@ Exit codes:
   0 = pass
   2 = fail, max retries exceeded (labeled needs-human)
   5 = fail, retry available (fix code and re-run)
+
+Algorithm:
+  1. Load or init checkpoint from --state-file (default: .grava/fix-bug-<id>-verify.json)
+     Checkpoint: {id, attempt, go_test, golangci_lint, go_build, verdict, started_at}
+  2. If --skip-verify → verdict="pass", all checks="skipped"; go to step 5
+  3. Run in .worktree/<id>/:
+     a. go test ./...              → record exit code
+     b. golangci-lint run ./...    → skip if not installed (shutil.which returns None)
+     c. go build ./...             → record exit code
+     verdict = "pass" if all non-skipped steps exit 0, else "fail"
+  4. Save checkpoint (increments attempt counter for next run)
+  5. grava wisp write <id> self_verify_result <verdict>
+     grava wisp write <id> self_verify_retries <attempt-1>
+  6. If verdict == "pass":
+     grava label <id> --add self-verified
+     grava signal CODER_DONE --issue <id> --actor <actor>  → pipeline_phase=coding_complete
+     Print JSON; exit 0
+  7. If verdict == "fail" and attempt <= MAX_RETRIES (2): exit 5 (fix and retry)
+  8. If verdict == "fail" and attempt > MAX_RETRIES:
+     grava label <id> --add needs-human
+     Print JSON; exit 2
 """
 import argparse
 import json

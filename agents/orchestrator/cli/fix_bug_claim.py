@@ -8,6 +8,20 @@ Exit codes:
   0 = claimed successfully (or already claimed — idempotent)
   1 = not a bug type or issue not found
   2 = grava claim failed
+
+Algorithm:
+  1. grava show <id> --json → verify type == "bug"; exit 1 if not
+  2. grava wisp read <id> pipeline_phase:
+     if phase in CLAIMED_OR_LATER → exit 0 (idempotent, print current state)
+  3. grava claim <id> → provisions .worktree/<id>/ on branch grava/<id>
+     exit 2 on failure
+  4. grava wisp write <id> team fix-bug
+  5. grava signal ISSUE_CLAIMED --issue <id> --actor <actor>
+     (sets pipeline_phase=claimed; falls back to direct wisp write if signal fails)
+  6. grava wisp write <id> orchestrator_heartbeat <unix-timestamp>
+  7. Print JSON {id, worktree: ".worktree/<id>", branch: "grava/<id>"}
+
+Note: grava wisp read exits 1 on missing key (not 0) — treat returncode=1 as "not set".
 """
 import argparse
 import json

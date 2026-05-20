@@ -1691,6 +1691,89 @@ def cmd_orchestrator_qa_report(args: argparse.Namespace) -> None:
     sys.exit(_orch_invoke("qa_report.py", "orch_qa_report", argv))
 
 
+def cmd_orchestrator_start(args: argparse.Namespace) -> None:
+    """Start an orchestrator session in a dedicated tmux window.
+
+    Creates a tmux session named ``stellar-orch-<repo-basename>``, starts a
+    Claude Code session inside it, and sends the initial /deploy command so the
+    orchestrator begins automatically.
+
+    If the session already exists the command prints the attach line and exits
+    (or attaches immediately when --attach is given).
+    """
+    import shutil as _shutil
+    import time as _time
+
+    target_repo = os.path.realpath(args.target_repo)
+    repo_name = os.path.basename(target_repo)
+    team = getattr(args, "team", None) or "epic-task"
+    session_name = f"stellar-orch-{repo_name}"
+    attach = getattr(args, "attach", False)
+
+    # 1. Require tmux
+    if _shutil.which("tmux") is None:
+        print(
+            "ERROR: tmux is not installed.\n"
+            "  macOS:  brew install tmux\n"
+            "  Ubuntu: sudo apt install tmux",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # 2. Require claude CLI
+    if _shutil.which("claude") is None:
+        print(
+            "ERROR: claude CLI not found in PATH.\n"
+            "  Install: https://claude.ai/claude-code",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # 3. If session already exists — attach or report
+    existing = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+    )
+    if existing.returncode == 0:
+        print(f"Orchestrator session '{session_name}' already running.")
+        print(f"  Attach:  tmux attach -t {session_name}")
+        if attach:
+            os.execvp("tmux", ["tmux", "attach", "-t", session_name])
+        return
+
+    # 4. Create new detached tmux session rooted in the target repo
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, "-c", target_repo],
+        check=True,
+    )
+
+    # 5. Start Claude Code inside the session
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session_name, "claude", "Enter"],
+        check=True,
+    )
+
+    # 6. Wait for Claude to initialise, then send the orchestrator entry command.
+    #    The /deploy command triggers the full session-init flow defined in
+    #    agents/orchestrator/AGENT.md: tech plan load → pick → implement.
+    _time.sleep(3)
+    initial_cmd = f"/deploy --team {team}"
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session_name, initial_cmd, "Enter"],
+        check=True,
+    )
+
+    print(f"Orchestrator session started.")
+    print(f"  Session: {session_name}")
+    print(f"  Team:    {team}")
+    print(f"  Repo:    {target_repo}")
+    print(f"  Attach:  tmux attach -t {session_name}")
+    print(f"  Kill:    tmux kill-session -t {session_name}")
+
+    if attach:
+        os.execvp("tmux", ["tmux", "attach", "-t", session_name])
+
+
 def _orch_pick_ids(team: str, target_repo: str, limit: int) -> list[str]:
     """Run pick_ready.py as a subprocess and return the issue IDs.
 
@@ -2269,6 +2352,23 @@ def main() -> None:
                                  "failure instead of continuing.")
     _add_plane_profile_flags(p_orch_dep)
 
+    # se orchestrator start — open a tmux session running claude
+    p_orch_start = orch_sub.add_parser(
+        "start",
+        help="Open a dedicated tmux session and start Claude Code as the orchestrator",
+    )
+    p_orch_start.add_argument("--target-repo", default=".", metavar="PATH",
+                              help="Target repository path (default: cwd)")
+    p_orch_start.add_argument(
+        "--team", default="epic-task",
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+        help="Team to wake on session start (default: epic-task)",
+    )
+    p_orch_start.add_argument(
+        "--attach", action="store_true",
+        help="Attach to the tmux session immediately after creating it",
+    )
+
     # se orchestrator fix-bug {claim,verify,pr}
     p_orch_fb = orch_sub.add_parser("fix-bug", help="Fix-bug pipeline phases")
     fb_sub = p_orch_fb.add_subparsers(dest="fb_cmd", metavar="PHASE")
@@ -2323,6 +2423,7 @@ def main() -> None:
             "doctor": cmd_orchestrator_doctor,
             "expand": cmd_orchestrator_expand,
             "deploy": cmd_orchestrator_deploy,
+            "start":  cmd_orchestrator_start,
         }
         if args.orch_cmd in orch_table:
             orch_table[args.orch_cmd](args)

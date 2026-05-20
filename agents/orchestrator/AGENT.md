@@ -217,6 +217,43 @@ Call `pick_ready.py` for each team, spawn each in its own Agent subagent.
 
 ---
 
+## Task-Generator Team Session Init
+
+Before expanding any epic, load the project's tech plan **once** at session start.
+The tech plan lives at `systems/<Name>/tech-plan.md` in stellar-engine and describes
+in-scope/out-of-scope requirements for the current development phase.
+
+```bash
+# Step 1: Resolve and load tech plan (once per session)
+PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
+# Agent: Read($PLAN_PATH)  ← load into context now
+
+# Step 2: Pick epics
+CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
+
+# Step 3: Check out-of-scope requirements
+# For each candidate epic:
+#   - Read the tech plan holistically (already in context — no fixed format assumed)
+#   - Use judgment: does the plan's content suggest this epic's domain is
+#     out of scope, deferred, or technically blocked for the current phase?
+#   - The plan may use any wording or structure — look for intent, not keywords
+#   - If the plan clearly excludes the epic's area → skip; warn operator with reason
+#   - If uncertain or not mentioned → proceed (absence of mention is not exclusion)
+
+# Step 4: Expand
+python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"
+# Tech plan is in context — use it to inform story/task decomposition
+```
+
+> **Tech plan** (`systems/<Name>/tech-plan.md`): free-form markdown describing the
+> project's technical goals, constraints, and scope for the current phase.
+> No fixed format required — the agent reads it as prose and applies judgment.
+> Useful things to include: goals, deferred areas, architecture constraints,
+> epic/story breakdown. Not every epic needs to be listed.
+
+---
+
 ## On /generate
 
 ```bash
@@ -224,7 +261,10 @@ Call `pick_ready.py` for each team, spawn each in its own Agent subagent.
 python3 agents/task-generator/cli/run.py "$PROJECT_ID" "$PAGE_ID" --dry-run
 # → show preview to operator, await approval → Phase B → Phase C
 
-# Without page_id: auto-pick from epic backlog
+# Without page_id: auto-pick from epic backlog (runs session init first)
+PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
+# Agent: Read($PLAN_PATH)
 CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
 EPIC_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
 [ -n "$EPIC_ID" ] && python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"

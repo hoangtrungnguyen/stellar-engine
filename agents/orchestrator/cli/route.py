@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Route a grava issue to the correct team.
+Route a grava issue to the correct team based on type and labels.
 
 Usage: python3 route.py <id> [--target-repo <path>]
 Output: JSON {"id": ..., "team": ..., "type": ..., "labels": [...]}
@@ -8,6 +8,17 @@ Exit codes:
   0 = routed successfully
   1 = unroutable type or issue not found
   2 = grava command failed
+
+Algorithm:
+  1. grava show <id> --json → parse issue type and labels list
+  2. Routing (label check takes priority over type):
+       "qa-ready" in labels          → team="qa"
+       type == "bug"                 → team="fix-bug"
+       type in task/story/subtask    → team="epic-task"
+       type == "epic"                → team="task-generator"
+       else                          → exit 1 "unroutable type: <type>"
+  3. grava wisp write <id> team <team>
+  4. Print JSON {id, team, type, labels}
 """
 import argparse
 import json
