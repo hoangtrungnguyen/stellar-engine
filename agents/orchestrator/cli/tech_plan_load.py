@@ -2,8 +2,9 @@
 """
 Resolve the tech plan for the current session's target repo.
 
-The tech plan is a markdown file that describes the project's technical scope,
-in-scope/out-of-scope epics, and high-level story breakdown. It lives at:
+The tech plan is a free-form markdown file describing the project's technical scope,
+constraints, and goals for the current development phase. No fixed format is required —
+the agent reads it as prose and applies judgment. It lives at:
   systems/<Name>/tech-plan.md  (alongside system.yaml inside stellar-engine)
 
 Load it ONCE at the start of an orchestrator session for the task-generator team.
@@ -189,15 +190,16 @@ def main(argv: list[str] | None = None) -> int:
     if not tech_plan_path.exists():
         print(
             f"ERROR: tech-plan.md not found at {tech_plan_path}.\n"
-            f"Create it with:\n"
-            f"  # {system_name} Tech Plan\n"
-            f"  ## In Scope\n"
-            f"  - ...\n"
-            f"  ## Out of Scope (current phase)\n"
-            f"  - ...\n"
-            f"  ## Epics\n"
-            f"  ### E1: <Epic Title>\n"
-            f"  - stories: ...",
+            f"\n"
+            f"Create a markdown file at that path describing the project's technical plan.\n"
+            f"No fixed format is required — the agent reads the document as free-form text\n"
+            f"and uses its content to understand technical scope and constraints.\n"
+            f"\n"
+            f"Suggested content to include:\n"
+            f"  - Technical goals or features for the current phase\n"
+            f"  - Areas explicitly excluded or deferred (helps the agent skip out-of-scope epics)\n"
+            f"  - Architecture decisions, constraints, or dependencies\n"
+            f"  - Epic/story breakdown if available",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -234,30 +234,23 @@ CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator
 
 # Step 3: Check out-of-scope requirements
 # For each candidate epic:
-#   - Consult the tech plan (already in context)
-#   - Does the tech plan mark this epic's technical area as OUT OF SCOPE?
-#     (e.g. "Out of scope: real-time sync", "Not in this phase: payment integration")
-#   - If explicitly excluded → skip; warn operator
-#   - If no exclusion found → proceed (not all epics need to be listed in the plan)
+#   - Read the tech plan holistically (already in context — no fixed format assumed)
+#   - Use judgment: does the plan's content suggest this epic's domain is
+#     out of scope, deferred, or technically blocked for the current phase?
+#   - The plan may use any wording or structure — look for intent, not keywords
+#   - If the plan clearly excludes the epic's area → skip; warn operator with reason
+#   - If uncertain or not mentioned → proceed (absence of mention is not exclusion)
 
 # Step 4: Expand
 python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"
-# Tech plan is already in context — use it to validate expansion intent
+# Tech plan is in context — use it to inform story/task decomposition
 ```
 
-> **Tech plan format** (`systems/<Name>/tech-plan.md`):
-> ```markdown
-> # <System> Tech Plan
-> ## In Scope
-> - User authentication
-> ## Out of Scope (current phase)
-> - Real-time notifications
-> ## Epics
-> ### E1: User Auth
-> - stories: login, signup
-> ```
-> Not every epic needs to be listed. The plan is consulted primarily to detect
-> out-of-scope work, and secondarily for context during expansion.
+> **Tech plan** (`systems/<Name>/tech-plan.md`): free-form markdown describing the
+> project's technical goals, constraints, and scope for the current phase.
+> No fixed format required — the agent reads it as prose and applies judgment.
+> Useful things to include: goals, deferred areas, architecture constraints,
+> epic/story breakdown. Not every epic needs to be listed.
 
 ---
 
