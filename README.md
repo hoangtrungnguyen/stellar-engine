@@ -123,7 +123,6 @@ se o route <issue-id> --target-repo <repo>             # classify team
 se o deploy --repo <name> [<id>] [--team T]            # Phase 0 (single issue; --repo NAME from repos.yaml)
 se o deploy --repo <name> --all --team T               # batch: Phase 0 for every ready issue on a registered repo
 se o deploy --repo <name> <epic-id>                    # epic → routes to task-generator
-se o start [--team T] [--attach]                       # tmux + Claude Code launcher
 # Listing ready issues (no longer a top-level `se o pick`):
 python3 agents/orchestrator/cli/pick_ready.py --team fix-bug --target-repo <repo>
 grava ready --json --limit 100
