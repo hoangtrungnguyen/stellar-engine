@@ -266,8 +266,8 @@ priority order (highest → lowest):
    while still loading the others from a config file.
 2. **CLI flags** — `--plane-config PATH` and `--plane-profile NAME`
    on Plane-touching subcommands (`se taskgen`, `se plane-sync`,
-   `se o doctor`, `se o expand`, `se o deploy`). They translate
-   directly to the env vars below.
+   `se o doctor`, `se o deploy`). They translate directly to the
+   env vars below.
 3. **`PLANE_CONFIG` env var** — absolute path to a JSON file.
 4. **`PLANE_PROFILE` env var** — short name `<X>` → loads `~/.config/plane/<X>.json`.
 5. **Default `~/.config/plane/config.json`** — fallback if nothing above
@@ -295,7 +295,7 @@ Then target a profile per call:
 ```bash
 se taskgen <project> <page> --plane-profile stellar-sandbox --yes
 PLANE_PROFILE=stellar-sandbox se o doctor --target-repo /tmp/sandbox-repo
-se o expand <epic-id> --plane-config ~/.config/plane/staging.json
+se o deploy <epic-id> --plane-config ~/.config/plane/staging.json
 ```
 
 ## Quick start (.env recipe)
@@ -1799,7 +1799,6 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
 #   se orchestrator route       <id>
 #   se orchestrator pick        --team {fix-bug|epic-task|qa|task-generator}
 #   se orchestrator doctor
-#   se orchestrator expand      <epic-id>          # task-generator delegate
 #   se orchestrator fix-bug claim   <id>
 #   se orchestrator fix-bug verify  <id>
 #   se orchestrator fix-bug pr      <id>
@@ -1920,14 +1919,6 @@ def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
     if args.json:
         argv.append("--json")
     sys.exit(_orch_invoke("doctor.py", "orch_doctor", argv))
-
-
-def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
-    _apply_plane_profile_env(args)
-    argv = [args.epic_id, "--target-repo", args.target_repo]
-    if args.dry_run:
-        argv.append("--dry-run")
-    sys.exit(_orch_invoke("task_gen_expand.py", "orch_task_gen_expand", argv))
 
 
 def cmd_orchestrator_epic_task_claim(args: argparse.Namespace) -> None:
@@ -2250,6 +2241,7 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             sys.exit(0)
 
         dispatched: list[str] = []
+        blocked: list[str] = []          # exit 3 from claim — skip, NOT a failure
         failed: list[tuple[str, int]] = []
 
         for idx, iid in enumerate(ids, start=1):
@@ -2272,6 +2264,11 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             rc = _orch_dispatch_phase0(iid, team, target_repo)
             if rc == 0:
                 dispatched.append(iid)
+            elif rc == 3:
+                # Hard-reject for unresolved blockers — NOT a failure.
+                # The loop continues; --stop-on-error does NOT trigger.
+                print(f"  skipped {iid} (exit=3, blocked by deps)")
+                blocked.append(iid)
             else:
                 failed.append((iid, rc))
                 if args.stop_on_error:
@@ -2280,14 +2277,19 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         # Batch summary
         print(f"\n── Batch summary (team={team}) ──")
         print(f"  dispatched: {len(dispatched)}  "
+              f"blocked: {len(blocked)}  "
               f"failed: {len(failed)}  "
               f"of {len(ids)} candidates")
         for iid, rc in failed:
             print(f"  failed {iid}: exit={rc}")
-        if not dispatched and not failed:
+        if blocked:
+            print(f"  hint: inspect blockers with "
+                  f"`grava blocked <id> --json` in the repo.")
+        if not dispatched and not blocked and not failed:
             # All candidates silently skipped (route mismatch).
             print(f"  note:       none of the {len(ids)} candidates routed to "
                   f"team={team}; nothing dispatched.")
+        # Exit 0 if only failures are absent. Blocked is normal and expected.
         sys.exit(0 if not failed else 1)
 
     # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────
@@ -2613,16 +2615,10 @@ def main() -> None:
     p_orch_doc.add_argument("--json", action="store_true")
     _add_plane_profile_flags(p_orch_doc)
 
-    # se orchestrator expand <epic-id>
-    p_orch_exp = orch_sub.add_parser(
-        "expand",
-        help="Resolve a grava epic's Plane page and delegate to task-generator",
-    )
-    p_orch_exp.add_argument("epic_id", help="Grava epic issue ID")
-    p_orch_exp.add_argument("--target-repo", default=".", metavar="PATH")
-    p_orch_exp.add_argument("--dry-run", action="store_true",
-                            help="task-generator Phase A preview only")
-    _add_plane_profile_flags(p_orch_exp)
+    # NOTE: `se o expand` was removed. To dispatch a known epic into the
+    # task-generator pipeline use `se o deploy <epic-id>` instead — it
+    # routes the epic to the `task-generator` team which invokes the
+    # underlying `task_gen_expand.py` script the same way `expand` did.
 
     # se orchestrator deploy [<id>] [--team T]
     p_orch_dep = orch_sub.add_parser(
@@ -2789,7 +2785,7 @@ def main() -> None:
             "route":  cmd_orchestrator_route,
             "pick":   cmd_orchestrator_pick,
             "doctor": cmd_orchestrator_doctor,
-            "expand": cmd_orchestrator_expand,
+            # NOTE: `expand` removed — use `deploy <epic-id>` instead.
             "deploy": cmd_orchestrator_deploy,
             "start":  cmd_orchestrator_start,
             "run":    cmd_orchestrator_run,
