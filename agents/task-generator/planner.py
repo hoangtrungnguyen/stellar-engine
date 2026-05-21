@@ -14,6 +14,7 @@ from ir import (
     Op,
     ParseWarning,
     RunPlan,
+    StoryNode,
     UpdateWorkItem,
 )
 
@@ -173,7 +174,7 @@ def plan_from_cached(
     """
     sentinel = sentinel_label_name(spec_page_id) if spec_page_id else None
 
-    def _create(node_kind, title, desc_md, type_key, parent_ref, ref_key, marker):
+    def _create(node_kind, title, desc_md, type_key, parent_ref, ref_key, marker, *, extras_html: str = ""):
         labels: list[str] = []
         if sentinel:
             labels.append(sentinel)
@@ -183,7 +184,7 @@ def plan_from_cached(
         return CreateWorkItem(
             node_kind=node_kind,
             title=title,
-            description_html=_md_to_html(desc_md),
+            description_html=_md_to_html(desc_md) + extras_html,
             type_id_key=type_key,
             parent_ref=parent_ref,
             ref_key=ref_key,
@@ -205,6 +206,7 @@ def plan_from_cached(
             ops.append(_create(
                 "story", story.title, story.description_md, "story",
                 epic_ref, story_ref, marker=story.type_marker,
+                extras_html=_story_extras_html(story),
             ))
             for k, task in enumerate(story.tasks):
                 ops.append(_create(
@@ -327,6 +329,15 @@ def _escape(text: str) -> str:
 def _section_comment(label: str, bullets: list[str]) -> str:
     items = "".join(f"<li>{_escape(b)}</li>" for b in bullets)
     return f"<p><strong>{label}:</strong></p><ul>{items}</ul>"
+
+
+def _story_extras_html(story: StoryNode) -> str:
+    """Render story.acceptance_criteria as an HTML block to append to
+    the work-item description. Returns "" if the AC list is empty."""
+    if not story.acceptance_criteria:
+        return ""
+    items = "".join(f"<li>{_escape(ac)}</li>" for ac in story.acceptance_criteria)
+    return f"<h4>Acceptance Criteria</h4><ul>{items}</ul>"
 
 
 def _related_update(ref_key: str, refs: list[str]) -> UpdateWorkItem:

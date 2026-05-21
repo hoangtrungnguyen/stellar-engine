@@ -285,3 +285,73 @@ def test_plan_allow_duplicate_pages_proceeds(tmp_path):
     assert rp.preview_path.exists()
     text = rp.preview_path.read_text()
     assert "Bypassed duplicate pages" in text
+
+
+def _ac_epics(acceptance_criteria, description_md="As a user, I want to sign up."):
+    return [EpicNode(
+        title="Auth",
+        description_md="",
+        spec_page_url="",
+        spec_page_id="page-1",
+        stories=[StoryNode(
+            title="Signup",
+            description_md=description_md,
+            acceptance_criteria=list(acceptance_criteria),
+        )],
+    )]
+
+
+def _story_create_op(rp):
+    return next(op for op in rp.plane_ops
+                if isinstance(op, CreateWorkItem) and op.node_kind == "story")
+
+
+def test_story_ac_folded_into_description_html(tmp_path):
+    rp = plan_from_cached(
+        epics=_ac_epics([
+            "Rejects duplicate emails",
+            "Verification link expires after 24h",
+        ]),
+        type_map={"epic": "type-epic", "story": "type-story", "task": "type-task"},
+        label_map={},
+        target_repo=tmp_path,
+        warnings=[],
+        run_id="r1",
+        spec_page_id="page-1",
+    )
+    story_op = _story_create_op(rp)
+    assert "<p>As a user, I want to sign up.</p>" in story_op.description_html
+    assert "<h4>Acceptance Criteria</h4>" in story_op.description_html
+    assert "<li>Rejects duplicate emails</li>" in story_op.description_html
+    assert "<li>Verification link expires after 24h</li>" in story_op.description_html
+
+
+def test_story_without_ac_unchanged(tmp_path):
+    rp = plan_from_cached(
+        epics=_ac_epics([]),
+        type_map={"epic": "type-epic", "story": "type-story", "task": "type-task"},
+        label_map={},
+        target_repo=tmp_path,
+        warnings=[],
+        run_id="r1",
+        spec_page_id="page-1",
+    )
+    story_op = _story_create_op(rp)
+    assert "Acceptance Criteria" not in story_op.description_html
+    assert story_op.description_html == "<p>As a user, I want to sign up.</p>"
+
+
+def test_story_ac_html_escaped(tmp_path):
+    """User-supplied AC text with HTML metacharacters must be escaped."""
+    rp = plan_from_cached(
+        epics=_ac_epics(["<script>alert(1)</script>"], description_md=""),
+        type_map={"epic": "type-epic", "story": "type-story", "task": "type-task"},
+        label_map={},
+        target_repo=tmp_path,
+        warnings=[],
+        run_id="r1",
+        spec_page_id="page-1",
+    )
+    story_op = _story_create_op(rp)
+    assert "<script>" not in story_op.description_html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in story_op.description_html
