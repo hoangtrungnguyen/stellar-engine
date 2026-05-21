@@ -2177,31 +2177,38 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         return False
 
     def _switch_or_attach() -> None:
-        """Hand off control to the deploy session.
+        """Hand off control to the deploy session — prefer a NEW window.
 
         Three strategies, in order:
-          1. If inside a tmux client, `tmux switch-client` (tmux refuses
-             to nest, and switch-client is the canonical "jump pane to
-             that session" verb).
-          2. Else try to open a NEW GUI terminal window running
-             `tmux attach`. Leaves the operator's current shell free.
-          3. Else fall back to `tmux attach` in the current shell
-             (covers SSH / headless / detection-miss cases).
+          1. Try to open a NEW GUI terminal window running `tmux attach`.
+             This is the primary path on macOS / desktop Linux. It works
+             whether or not the operator is already inside tmux — the new
+             window starts a fresh tmux client outside the current pane,
+             so the operator's existing tmux session is untouched.
+          2. If no GUI terminal is available BUT we're inside a tmux
+             client, `tmux switch-client -t <session>` (changes the
+             current client's view; the only sensible move in pure-tmux
+             headless contexts).
+          3. Else `tmux attach` in the current shell (SSH / no-tmux).
         """
+        attach_cmd = f"tmux attach -t {session_name}"
+        if _open_new_window(attach_cmd):
+            print(f"  Opened a new terminal window attached to {session_name}.")
+            return
+
         if inside_tmux:
+            # GUI spawn failed but we are inside tmux. switch-client is
+            # the only way to actually show the session to the operator.
+            print(f"  No GUI terminal detected; switching tmux client to "
+                  f"{session_name}.")
             subprocess.run(
                 ["tmux", "switch-client", "-t", session_name],
                 check=False,
             )
             return
 
-        attach_cmd = f"tmux attach -t {session_name}"
-        if _open_new_window(attach_cmd):
-            print(f"  Opened a new terminal window attached to {session_name}.")
-            return
-
-        # No GUI terminal — take over the current shell instead so the
-        # operator at least sees the session immediately.
+        # No GUI terminal and not inside tmux — take over the current
+        # shell so the operator at least sees the session immediately.
         print(f"  No GUI terminal detected; attaching in current shell.")
         os.execvp("tmux", ["tmux", "attach", "-t", session_name])
 
@@ -2251,13 +2258,11 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     print(f"  Command: {slash_cmd}")
     if attach:
         # Print before handing off — output lands in the operator's
-        # scrollback if they end up taking over the current shell.
-        if inside_tmux:
-            print(f"  Switching client to {session_name} (already in tmux)…")
-        else:
-            print(f"  Opening attach in new window… "
-                  f"(Ctrl+B d to detach later, "
-                  f"`tmux kill-session -t {session_name}` to stop)")
+        # scrollback if the new-window path fails and we take over the
+        # current shell.
+        print(f"  Opening attach in new window… "
+              f"(Ctrl+B d to detach later, "
+              f"`tmux kill-session -t {session_name}` to stop)")
         _switch_or_attach()
     else:
         print(f"  Attach:  tmux attach -t {session_name}")
