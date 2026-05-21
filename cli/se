@@ -14,6 +14,9 @@ Subcommands:
   generate     Run the generator chain (extract → outline → render)
   taskgen      Plane spec page → Plane epics/stories/tasks + Grava mirror
   plane-sync   Sync a Grava issue → Plane (status / assignee / comments)
+  orchestrator run
+               Long-running fleet daemon (D0 scaffold — stub today;
+               tick loop lands in D1, pr-watcher absorption in D6).
 
 Every subcommand except `init` auto-loads `<cwd>/.env` (or
 `$STELLAR_ENGINE_HOME/.env` if set) before dispatching, so operators only
@@ -2134,6 +2137,28 @@ def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
     return r.returncode
 
 
+def cmd_orchestrator_run(args: argparse.Namespace) -> None:
+    """Long-running fleet daemon (D0 scaffold).
+
+    Wraps `agents/orchestrator/cli/daemon.py`. The daemon will own the
+    tick loop, in-flight tracking, and (from Phase D6) the folded-in
+    PR-merge watcher — see `docs/orchestrator/daemon-plan.md`. Today
+    every invocation prints a stub message and exits 0; the flags are
+    plumbed so the surface won't change as D1–D6 land.
+    """
+    argv: list[str] = []
+    if args.once:
+        argv.append("--once")
+    if args.repos:
+        argv += ["--repos", args.repos]
+    if args.policies:
+        argv += ["--policies", args.policies]
+    if args.max_concurrent is not None:
+        argv += ["--max-concurrent", str(args.max_concurrent)]
+    argv += ["--log-level", args.log_level]
+    sys.exit(_orch_invoke("daemon.py", "orch_daemon", argv))
+
+
 def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     """Composite: route (or pick) → Phase 0 entry for the resolved team.
 
@@ -2619,6 +2644,34 @@ def main() -> None:
         help="Attach to the tmux session immediately after creating it",
     )
 
+    # se orchestrator run — long-running fleet daemon (D0 scaffold).
+    # See docs/orchestrator/daemon-plan.md. Currently a stub: every call
+    # prints a one-line message and exits 0. The flag set is committed
+    # forward through D1–D6; D1 wires the tick loop without changing
+    # the surface.
+    p_orch_run = orch_sub.add_parser(
+        "run",
+        help="Run the fleet daemon (D0 scaffold — stub today)",
+    )
+    p_orch_run.add_argument("--once", action="store_true",
+                            help="Run a single tick and exit (D1+). "
+                                 "Currently a no-op (the stub exits "
+                                 "after one line either way).")
+    p_orch_run.add_argument("--repos", default=None, metavar="PATH",
+                            help="repos.yaml path (D1+). Defaults to "
+                                 "<cwd>/repos.yaml.")
+    p_orch_run.add_argument("--policies", default=None, metavar="DIR",
+                            help="policies/ dir (D1+). Defaults to "
+                                 "<cwd>/policies.")
+    p_orch_run.add_argument("--max-concurrent", type=int, default=None,
+                            dest="max_concurrent", metavar="N",
+                            help="Global cap on in-flight pipelines "
+                                 "across all repos (D1+).")
+    p_orch_run.add_argument("--log-level", default="INFO",
+                            dest="log_level",
+                            choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+                            help="Log level (default: INFO).")
+
     # se orchestrator epic-task {claim}
     p_orch_et = orch_sub.add_parser("epic-task", help="Epic-task pipeline phases")
     et_sub = p_orch_et.add_subparsers(dest="et_cmd", metavar="PHASE")
@@ -2693,6 +2746,7 @@ def main() -> None:
             "expand": cmd_orchestrator_expand,
             "deploy": cmd_orchestrator_deploy,
             "start":  cmd_orchestrator_start,
+            "run":    cmd_orchestrator_run,
         }
         if args.orch_cmd in orch_table:
             orch_table[args.orch_cmd](args)
