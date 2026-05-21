@@ -898,9 +898,13 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
                                             points at /tmp/_MEIxxx for the
                                             PyInstaller binary, so sibling
                                             detect is meaningless there)
-      4. ~/Space/grava, ~/src/grava, ~/grava
-                                            (common operator layouts; works
-                                             for source AND binary installs)
+      4. Common operator clone locations:
+           ~/Space/grava, ~/src/grava, ~/IdeaProjects/grava,
+           ~/Projects/grava, ~/code/grava, ~/grava
+                                            (probed for source AND binary
+                                             installs so the binary user
+                                             gets a working default without
+                                             setting $GRAVA_SRC)
     """
     if explicit:
         p = Path(explicit).expanduser().resolve()
@@ -932,6 +936,9 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
     home = Path.home()
     for candidate in (home / "Space" / "grava",
                       home / "src" / "grava",
+                      home / "IdeaProjects" / "grava",  # JetBrains IDE default
+                      home / "Projects" / "grava",
+                      home / "code" / "grava",
                       home / "grava"):
         if candidate.is_dir():
             return (candidate.resolve(), f"common-path {candidate}")
