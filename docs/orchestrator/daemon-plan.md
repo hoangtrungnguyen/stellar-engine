@@ -2,11 +2,14 @@
 
 ## Status
 
-⬜ **Not started.** This document is the design + phase plan for a
-continuous-loop fleet runtime. The one-shot CLI wrappers shipped today
-(`se orchestrator deploy`, `route`, `pick`, `fix-bug *`, `qa *`,
-`expand`, `doctor`) are stateless single-fire calls — an operator (or
-cron job) drives them manually.
+🟨 **D0 scaffolded** (2026-05-21). `agents/orchestrator/cli/daemon.py`
+exists as a stub; `se orchestrator run` is wired through but every
+invocation prints a one-line message and exits 0. Phases D1–D6 still
+to do.
+
+The one-shot CLI wrappers shipped today (`se orchestrator deploy`,
+`route`, `pick`, `fix-bug *`, `qa *`, `expand`, `doctor`) are stateless
+single-fire calls — an operator (or cron job) drives them manually.
 
 The daemon replaces "operator-as-loop" with a long-running process that
 polls the grava backlog, dispatches ready issues to teams, and respects
@@ -42,7 +45,11 @@ Operator's role narrows to:
 - Distributed coordination — single daemon process per host.
 - Web UI — `se orchestrator status` CLI is enough.
 - Cross-repo dependency awareness — each repo runs independently.
-- Replacing `pr_merge_watcher.sh` cron — it's already in place, keep it.
+
+> ~~Replacing `pr_merge_watcher.sh` cron — it's already in place, keep
+> it.~~ **Superseded (2026-05-21):** Phase D6 below absorbs the bash
+> watcher into the daemon as a separate 300s tick. The bash script will
+> be deleted in D6.
 
 ## Scope
 
@@ -96,6 +103,53 @@ mode and CI.
     the last phase, and surface in `se orchestrator status`.
 - No auto-recovery — operator decides.
 
+### Phase D6 — pr-lifecycle ticker (absorbs `pr_merge_watcher.sh`)
+
+> Sequencing note: numbered D6 to keep the existing D3/D4/D5 IDs stable.
+> In implementation order, D6 lands after D1 (it depends on the scheduler)
+> and before D5 (the systemd unit should advertise both tickers).
+
+- Add a second ticker alongside the backlog ticker built in D1.
+  Two cadences in one process, one scheduler:
+  - **backlog ticker**: 60s (D1) — pick_ready → Phase 0 dispatch
+  - **pr-lifecycle ticker**: 300s (D6) — PR state diff → signals/labels
+- New module `agents/orchestrator/runtime/pr_state.py` — pure
+  `next_state(snapshot, view, now, policy) -> (state, events)`.
+  Zero I/O, unit-testable. Replaces the nested-switch logic in
+  `pr_merge_watcher.sh`.
+- New adapters `runtime/adapters/grava.py`, `runtime/adapters/github.py`
+  — thin subprocess wrappers. GitHub adapter uses `gh api graphql` for
+  bulk PR fetch (one call per repo per tick, not N+1).
+- New composition `runtime/pr_watcher.py` — `PRWatcher.tick(repo_path)`.
+  Singleton via `fcntl.flock` on `.grava/pr-watcher.lock` (replaces
+  pidfile in the bash script — no PID-recycle bugs).
+- Wisp schema centralizes on `pr_state` (enum) + `pr_state_changed_at`.
+  First tick migrates from the scattered booleans (`pr_stale`,
+  `pr_rejection_recorded`, `pr_merged_at`, `pr_rejection_reason`) that
+  the bash watcher wrote.
+- Per-team re-entry hints move from `case "$TEAM"` to a `TEAM_HANDLERS`
+  dict (`fix-bug → /deploy <id> --retry`, `epic-task → /ship <id>
+  --retry`, etc.). Adding a team = one dict entry.
+- **Delete** `agents/orchestrator/scripts/pr_merge_watcher.sh` and
+  the `_check_cron` row in `cli/se`'s doctor checks.
+
+Configuration (new section in `policies/default.yaml`):
+```yaml
+pr_watcher:
+  enabled: true
+  interval_seconds: 300
+  stale_threshold_hours: 72
+  github_api:
+    batch_max: 50
+    timeout_seconds: 30
+    backoff: { base_seconds: 5, max_seconds: 300 }
+  on_terminal_state: "remove_label"   # un-label `pr-created` once MERGED/CLOSED
+```
+
+See [[pr-watcher-redesign]] in memory for the full design rationale,
+the three-layer architecture (pure / adapters / composition), and the
+old → new wisp-schema mapping.
+
 ### Phase D3 — failure streak pause
 
 - Track per-repo failure count in
@@ -135,22 +189,31 @@ Reads from grava wisps + daemon state file. Does not mutate.
 
 **New**:
 - `agents/orchestrator/cli/daemon.py` — tick loop, signal handling.
+  ✅ D0 scaffold landed (stub `main(argv)` only; flags plumbed forward).
 - `agents/orchestrator/cli/status.py` — read-only status renderer.
 - `agents/orchestrator/runtime.py` — shared helpers (in-flight counting,
   state-file I/O, policy loading).
+- `agents/orchestrator/runtime/pr_state.py`,
+  `runtime/pr_watcher.py`, `runtime/adapters/{grava,github}.py`
+  — D6 PR-watcher rewrite (replaces `scripts/pr_merge_watcher.sh`).
 - `scripts/systemd/stellar-orchestrator.service`,
   `scripts/launchd/com.stellar.orchestrator.plist`.
 - `docs/orchestrator/daemon-ops.md` — operator runbook (start, stop,
   pause, drain, debug).
 
 **Modify**:
-- `cli/se` — add `cmd_orchestrator_run`, `cmd_orchestrator_status`,
-  `cmd_orchestrator_pause`, `cmd_orchestrator_resume` + subparsers.
+- `cli/se` — add `cmd_orchestrator_run` ✅ D0, plus
+  `cmd_orchestrator_status`, `cmd_orchestrator_pause`,
+  `cmd_orchestrator_resume` (later phases).
 - `agents/orchestrator/AGENT.md` — add "Daemon mode" section after
   "Entry commands".
 - `CLAUDE.md` — remove the "fleet runtime is unbuilt" caveat once D1
   lands. Add `se orchestrator run` to the operator entry points.
 - `scripts/install.sh` — `--enable-daemon` flag.
+
+**Delete (in D6)**:
+- `agents/orchestrator/scripts/pr_merge_watcher.sh` and the
+  `_check_cron` row in `cli/se`'s doctor checks.
 
 ## Verification
 
@@ -170,6 +233,11 @@ For each phase:
 - **D5**: `systemctl status stellar-orchestrator` (Linux) /
   `launchctl list | grep stellar` (macOS) reports active. Killing process
   triggers auto-restart.
+- **D6**: Plant a `pr-created` label + `pr_number` wisp on a merged PR.
+  Run `--once`. Verify: `pr_state` wisp = `merged`, issue closed, label
+  `pr-created` removed, single `PR_MERGED` + `PIPELINE_COMPLETE` signal
+  pair emitted (not duplicated across ticks). Bash watcher binary
+  removed; doctor no longer reports the cron row.
 
 ## Risks
 
