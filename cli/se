@@ -13,6 +13,11 @@ Subcommands:
   generate     Run the generator chain (extract → outline → render)
   taskgen      Plane spec page → Plane epics/stories/tasks + Grava mirror
   plane-sync   Sync a Grava issue → Plane (status / assignee / comments)
+
+Every subcommand except `init` auto-loads `<cwd>/.env` (or
+`$STELLAR_ENGINE_HOME/.env` if set) before dispatching, so operators only
+have to `cp .env.example .env` once. Shell-set env vars always win over
+the file — see `_load_dotenv_if_present` for details.
 """
 from __future__ import annotations
 
@@ -60,6 +65,85 @@ def _load_version() -> tuple[str, str, str]:
 
 
 SE_VERSION, SE_COMMIT, SE_BUILD_DATE = _load_version()
+
+
+# ── .env auto-load ────────────────────────────────────────────────────────────
+#
+# Every `se` subcommand except `init` calls `_load_dotenv_if_present()` at
+# the start of `main()`, so operators can drop credentials in a single
+# `<engine-root>/.env` file instead of sourcing it manually each shell
+# (the old `set -a; source .env; set +a` recipe still works — auto-load
+# never overrides values already set in the shell environment).
+#
+# Lookup order (first match wins):
+#   1. $STELLAR_ENGINE_HOME/.env   (only when STELLAR_ENGINE_HOME is set)
+#   2. <cwd>/.env                  (typical operator pattern: run from engine root)
+#
+# We deliberately do NOT walk parent directories — that would risk picking up
+# unrelated `.env` files (e.g. an OS-level one in $HOME or a target-repo `.env`)
+# and silently injecting their contents into a Plane API call.
+
+
+def _apply_dotenv(path: Path) -> None:
+    """Parse a `.env` file at `path` and populate `os.environ`.
+
+    Supports the common dotenv subset:
+      - blank lines and `#` comments
+      - `KEY=value`, `KEY="value"`, `KEY='value'`
+      - optional leading `export ` (so the file is also valid for `source`)
+      - inline `# comment` on unquoted values (must be preceded by whitespace)
+
+    Existing `os.environ` values are NEVER overridden — shell-set vars win
+    over file-set vars, matching python-dotenv's default. Malformed lines
+    are silently skipped (so a broken line doesn't break every `se` call).
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        # Reject anything that isn't a plain identifier — guards against
+        # garbage like `foo bar=baz` silently setting `foo bar`.
+        if not key or not all(c.isalnum() or c == "_" for c in key) or key[0].isdigit():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        else:
+            for i, ch in enumerate(value):
+                if ch == "#" and (i == 0 or value[i - 1].isspace()):
+                    value = value[:i].rstrip()
+                    break
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+
+
+def _load_dotenv_if_present() -> Path | None:
+    """Auto-load `.env` from the engine root if present.
+
+    Returns the loaded path (for visibility in tests / future logging),
+    or None when no `.env` is found in any candidate location.
+    """
+    candidates: list[Path] = []
+    home = os.environ.get("STELLAR_ENGINE_HOME")
+    if home:
+        candidates.append(Path(home) / ".env")
+    candidates.append(Path.cwd() / ".env")
+    for path in candidates:
+        if path.is_file():
+            _apply_dotenv(path)
+            return path
+    return None
 
 
 # ── data types ────────────────────────────────────────────────────────────────
@@ -139,8 +223,10 @@ _ENV_EXAMPLE = """\
 #   cp .env.example .env
 #   chmod 600 .env
 #
-# Load into the current shell:
-#   set -a; source .env; set +a
+# Every `se` subcommand except `init` auto-loads `<engine-root>/.env`
+# (or $STELLAR_ENGINE_HOME/.env if that env var is set). Values already
+# present in the shell environment WIN over .env, so manual
+# `set -a; source .env; set +a` is still supported and overrides this file.
 
 # ── Plane ─────────────────────────────────────────────────────────────────────
 # Workspace slug from your Plane URL: https://app.plane.so/<workspace>/
@@ -214,12 +300,14 @@ se o expand <epic-id> --plane-config ~/.config/plane/staging.json
 cp .env.example .env
 chmod 600 .env
 $EDITOR .env                     # fill in real values
-set -a; source .env; set +a      # load into the current shell
 ```
 
-To make the values persist across shells, source `.env` from your shell rc
-(`~/.zshrc`, `~/.bashrc`, …) — or use a tool like `direnv` to auto-load on
-`cd`.
+Every `se` subcommand except `init` auto-loads `<engine-root>/.env` (or
+`$STELLAR_ENGINE_HOME/.env` if that env var is set) — no shell sourcing
+required. Values already exported in your shell still win, so the manual
+`set -a; source .env; set +a` recipe (or `direnv`) keeps working as an
+override if you want one set of creds in your rc and a per-project
+`.env` for everything else.
 
 ## What each variable does
 
@@ -1016,10 +1104,10 @@ def _check_python_module(module: str, *, required: bool = True,
 def _check_env_file(base: Path) -> Check:
     env_file = base / ".env"
     if env_file.exists():
-        return Check(".env", "ok", str(env_file))
+        return Check(".env", "ok", f"{env_file} (auto-loaded by `se`)")
     example = base / ".env.example"
     hint = f"copy {example} → .env and edit" if example.exists() else "create from .env.example"
-    return Check(".env", "warn", f"not present — {hint}")
+    return Check(".env", "warn", f"not present — {hint} (will not auto-load)")
 
 
 def _check_generator(base: Path) -> list[Check]:
@@ -2387,6 +2475,13 @@ def main() -> None:
     p_qa_rep.add_argument("--actor", default=None)
 
     args = parser.parse_args()
+
+    # Auto-load `<engine-root>/.env` for every subcommand except `init`.
+    # `init` scaffolds `.env.example` on a fresh dir — the operator hasn't
+    # filled in `.env` yet, and init itself needs no credentials. Skipping
+    # it keeps init usable on a clean checkout.
+    if args.cmd != "init":
+        _load_dotenv_if_present()
 
     # Two-level dispatch for `orchestrator <sub>` (alias: `o`)
     if args.cmd in ("orchestrator", "o"):
