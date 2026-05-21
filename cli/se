@@ -7,7 +7,8 @@ Subcommands:
                three bundled sub-agents and slash commands
   repos        List or modify configured repos
     repos list  List entries (default action)
-    repos add   Register a new repo (and `grava init` it if needed)
+    repos add   Register a new repo (`grava init` + install canonical
+                grava agents/skills into <path>/.claude/)
   doctor       Validate global tools and configured repos
   download     Pull Plane project pages to systems/<workspace>/<project>/
   generate     Run the generator chain (extract → outline → render)
@@ -786,6 +787,130 @@ fi
 """
 
 
+# ── grava agent-team install (used by `se repos add`) ────────────────────────
+#
+# Mirrors the manual `cp` block in grava's docs/guides/INSTALL_AGENT_TEAM.md
+# (Path B.3): every target repo registered via `se repos add` gets the same
+# 6 agents + 12 skills the grava team ships canonically, copied straight
+# from a local grava clone.
+#
+# Lookup order for the grava source clone:
+#   1. --grava-src PATH         (explicit flag on `se repos add`)
+#   2. $GRAVA_SRC               (env var; matches the convention in the
+#                                grava install docs)
+#   3. <stellar-engine-parent>/grava   (sibling-dir auto-detect for the
+#                                       typical ~/Space/{stellar-engine,grava}
+#                                       layout)
+# If none resolve, the install is skipped with a hint — never fatal.
+#
+# Overwrite policy is ALWAYS-OVERWRITE: every `se repos add` (re-)syncs the
+# repo's `.claude/{agents,skills}/` to whatever the current grava clone has.
+# Operators who want to preserve customisations should pass --no-grava-assets
+# and copy by hand. Rationale: the agent team is a canonical contract owned
+# by grava; per-repo customisation is the exception, not the default.
+
+_GRAVA_AGENTS = (
+    "bug-hunter",
+    "coder",
+    "golang-pro",
+    "planner",
+    "pr-creator",
+    "reviewer",
+)
+
+_GRAVA_SKILLS = (
+    "ship",
+    "hunt",
+    "plan",
+    "grava-bug-hunt",
+    "grava-claim",
+    "grava-cli",
+    "grava-code-review",
+    "grava-complete-dev-story",
+    "grava-dev-epic",
+    "grava-dev-task",
+    "grava-gen-issues",
+    "grava-next-issue",
+)
+
+
+def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
+    """Resolve the grava source clone path.
+
+    Returns (path, reason) where `reason` is a human-readable description
+    of which lookup step won (for the operator-facing log line). `path`
+    is None if nothing resolved.
+    """
+    if explicit:
+        p = Path(explicit).expanduser().resolve()
+        return (p if p.is_dir() else None,
+                f"--grava-src {p}" + ("" if p.is_dir() else " (missing)"))
+    env = os.environ.get("GRAVA_SRC")
+    if env:
+        p = Path(env).expanduser().resolve()
+        return (p if p.is_dir() else None,
+                f"$GRAVA_SRC={p}" + ("" if p.is_dir() else " (missing)"))
+    # Sibling-dir auto-detect: stellar-engine and grava typically live
+    # next to each other (e.g. ~/Space/stellar-engine + ~/Space/grava).
+    se_root = _repo_root()
+    sibling = (se_root.parent / "grava").resolve()
+    if sibling.is_dir():
+        return (sibling, f"sibling {sibling}")
+    return (None,
+            f"no grava clone found (tried --grava-src, $GRAVA_SRC, "
+            f"and sibling {sibling})")
+
+
+def _install_grava_assets(
+    repo_path: Path,
+    grava_src: Path,
+) -> tuple[list[str], list[str]]:
+    """Copy grava's `.claude/agents/*.md` + `.claude/skills/<name>/` into
+    the target repo. Always overwrites — see policy note above.
+
+    Returns (status_lines, missing_sources). `missing_sources` is non-empty
+    only when an agent .md or skill directory listed in _GRAVA_AGENTS /
+    _GRAVA_SKILLS is absent from the source clone (broken or out-of-date
+    clone — operator action required).
+    """
+    status: list[str] = []
+    missing: list[str] = []
+
+    src_agents = grava_src / ".claude" / "agents"
+    src_skills = grava_src / ".claude" / "skills"
+    dst_agents = repo_path / ".claude" / "agents"
+    dst_skills = repo_path / ".claude" / "skills"
+    dst_agents.mkdir(parents=True, exist_ok=True)
+    dst_skills.mkdir(parents=True, exist_ok=True)
+
+    for name in _GRAVA_AGENTS:
+        src = src_agents / f"{name}.md"
+        if not src.is_file():
+            missing.append(str(src))
+            continue
+        dst = dst_agents / f"{name}.md"
+        existed = dst.exists()
+        shutil.copy2(src, dst)
+        status.append(f"  {'updated' if existed else 'created'}  {dst}")
+
+    for name in _GRAVA_SKILLS:
+        src = src_skills / name
+        if not src.is_dir():
+            missing.append(str(src))
+            continue
+        dst = dst_skills / name
+        existed = dst.exists()
+        # dirs_exist_ok=True overwrites individual files but leaves any
+        # extra files the operator may have added in the dest dir alone.
+        # For a clean "match source exactly" we'd rmtree first — but
+        # operators sometimes drop README.md / notes in skill dirs, and
+        # nuking those silently would be worse than letting them linger.
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+        status.append(f"  {'updated' if existed else 'created'}  {dst}/")
+
+    return status, missing
+
+
 def _render_plane_sync_env(plane_project_id: str,
                            grava_repo: str | None = None,
                            system_yaml: str | None = None) -> str:
@@ -908,6 +1033,35 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         print(f"  created  {grava_marker}/")
+
+    # ── grava agent-team (.claude/agents + .claude/skills) ────────────────
+    # Mirrors Path B.3 of grava's INSTALL_AGENT_TEAM.md. Default ON; skip
+    # with --no-grava-assets. ALWAYS overwrites — operators keep canonical
+    # files in sync with whatever the grava clone currently has.
+    if args.no_grava_assets:
+        print("  skipped  grava agents/skills (--no-grava-assets)")
+    else:
+        grava_src, reason = _resolve_grava_src(args.grava_src)
+        if grava_src is None:
+            print(f"  skipped  grava agents/skills ({reason})")
+            print(
+                "           pass --grava-src PATH or set $GRAVA_SRC, "
+                "or use --no-grava-assets to silence."
+            )
+        else:
+            print(f"  source   grava clone: {reason}")
+            asset_status, asset_missing = _install_grava_assets(
+                repo_path, grava_src
+            )
+            for line in asset_status:
+                print(line)
+            if asset_missing:
+                print(
+                    "  warning  grava clone is missing canonical assets "
+                    "(stale clone? pull origin/main):"
+                )
+                for m in asset_missing:
+                    print(f"           {m}")
 
     # ── Plane-sync hook (.grava/hooks/plane-sync.{sh,env}) ────────────────
     # Skip when the user explicitly opts out, or when no project id is given
@@ -2141,7 +2295,8 @@ def main() -> None:
 
     p_repos_add = repos_sub.add_parser(
         "add",
-        help="Register a new repo (runs `grava init` in <path> if .grava/ missing)",
+        help="Register a new repo (runs `grava init` + installs grava "
+             "agents/skills into <path>/.claude/)",
     )
     p_repos_add.add_argument("name", nargs="?", default=None,
                              help="Logical repo name (registry key); defaults to the folder name of --path")
@@ -2168,6 +2323,20 @@ def main() -> None:
     p_repos_add.add_argument("--no-hooks", action="store_true",
                              help="Skip plane-sync hook installation even "
                                   "when --plane-project-id is given")
+    p_repos_add.add_argument("--grava-src", default=None, metavar="PATH",
+                             dest="grava_src",
+                             help="Path to a local grava clone — used to "
+                                  "source the canonical 6 agents + 12 skills "
+                                  "for <path>/.claude/. Falls back to "
+                                  "$GRAVA_SRC, then a sibling `../grava` dir "
+                                  "next to the stellar-engine checkout.")
+    p_repos_add.add_argument("--no-grava-assets", action="store_true",
+                             dest="no_grava_assets",
+                             help="Skip installing grava agents/skills into "
+                                  "<path>/.claude/. Default behaviour copies "
+                                  "the canonical set (always overwriting) so "
+                                  "every registered repo runs the same agent "
+                                  "team.")
     p_repos_add.add_argument("--dir", default=".", metavar="DIR",
                              help="Stellar-engine config dir (where repos.yaml lives)")
 
