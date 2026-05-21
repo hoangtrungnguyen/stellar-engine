@@ -2121,7 +2121,29 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     slash_cmd = " ".join(slash_parts)
 
     session_name = f"stellar-deploy-{args.repo}"
-    attach = getattr(args, "attach", False)
+    detach = getattr(args, "detach", False)
+    # `--detach` opts out of auto-attach. The default is to take over the
+    # current terminal (or switch to the session if already inside tmux).
+    attach = not detach
+    inside_tmux = bool(os.environ.get("TMUX"))
+
+    def _switch_or_attach() -> None:
+        """Hand off the current terminal to the deploy session.
+
+        If we're already inside a tmux client, `tmux attach` refuses to
+        nest — use `tmux switch-client` instead so the operator's pane
+        jumps to the deploy session. Otherwise `tmux attach` replaces the
+        current process so Ctrl+C in this shell goes to Claude, not us.
+        """
+        if inside_tmux:
+            # `switch-client` returns immediately; the operator's tmux UI
+            # now shows the deploy session. No exec needed.
+            subprocess.run(
+                ["tmux", "switch-client", "-t", session_name],
+                check=False,
+            )
+            return
+        os.execvp("tmux", ["tmux", "attach", "-t", session_name])
 
     # 5. Check if the session already exists.
     existing = subprocess.run(
@@ -2140,9 +2162,10 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
             check=True,
         )
-        print(f"  Attach:  tmux attach -t {session_name}")
         if attach:
-            os.execvp("tmux", ["tmux", "attach", "-t", session_name])
+            _switch_or_attach()
+        else:
+            print(f"  Attach:  tmux attach -t {session_name}")
         return
 
     # 6. New session: create detached, start claude, wait, send command.
@@ -2154,8 +2177,8 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         ["tmux", "send-keys", "-t", session_name, "claude", "Enter"],
         check=True,
     )
-    # Sleep matches `se o start`'s heuristic — 3s gives Claude time to
-    # initialise before its stdin is fed the first command.
+    # Sleep matches the prior `se o start` heuristic — 3s gives Claude
+    # time to initialise before its stdin is fed the first command.
     _time.sleep(3)
     subprocess.run(
         ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
@@ -2166,11 +2189,18 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     print(f"  Session: {session_name}")
     print(f"  Repo:    {args.repo} → {target_repo}")
     print(f"  Command: {slash_cmd}")
-    print(f"  Attach:  tmux attach -t {session_name}")
-    print(f"  Kill:    tmux kill-session -t {session_name}")
-
     if attach:
-        os.execvp("tmux", ["tmux", "attach", "-t", session_name])
+        # Print before handing off — output lands in the operator's
+        # scrollback once they detach (Ctrl+B d) later.
+        if inside_tmux:
+            print(f"  Switching client to {session_name} (already in tmux)…")
+        else:
+            print(f"  Attaching… (Ctrl+B d to detach, "
+                  f"`tmux kill-session -t {session_name}` to stop)")
+        _switch_or_attach()
+    else:
+        print(f"  Attach:  tmux attach -t {session_name}")
+        print(f"  Kill:    tmux kill-session -t {session_name}")
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -2496,8 +2526,10 @@ def main() -> None:
                             help="With --all: bail at the first per-issue "
                                  "failure instead of continuing.")
     p_orch_dep.add_argument(
-        "--attach", action="store_true",
-        help="Attach to the tmux session immediately after launching it.",
+        "--detach", action="store_true",
+        help="Create the tmux session in the background — don't attach "
+             "to it now. Default: attach after launch (or send-keys + attach "
+             "if reusing an existing session).",
     )
     _add_plane_profile_flags(p_orch_dep)
 
