@@ -136,7 +136,7 @@ A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
 
 **Plane credentials.** Every subcommand that talks to Plane (`doctor`,
-`expand`, `deploy` when routing to `task-generator`) accepts
+`deploy` when routing to `task-generator`) accepts
 `--plane-profile NAME` (loads `~/.config/plane/<NAME>.json`) and
 `--plane-config PATH` (arbitrary file). Both translate to the
 `PLANE_PROFILE` / `PLANE_CONFIG` env vars that `plane_client.load_credentials`
