@@ -840,6 +840,17 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
     Returns (path, reason) where `reason` is a human-readable description
     of which lookup step won (for the operator-facing log line). `path`
     is None if nothing resolved.
+
+    Lookup chain (first match wins):
+      1. --grava-src PATH                  (explicit flag)
+      2. $GRAVA_SRC                        (env var; matches grava install docs)
+      3. <stellar-engine>/../grava sibling (SOURCE runs only — `_repo_root()`
+                                            points at /tmp/_MEIxxx for the
+                                            PyInstaller binary, so sibling
+                                            detect is meaningless there)
+      4. ~/Space/grava, ~/src/grava, ~/grava
+                                            (common operator layouts; works
+                                             for source AND binary installs)
     """
     if explicit:
         p = Path(explicit).expanduser().resolve()
@@ -850,15 +861,36 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
         p = Path(env).expanduser().resolve()
         return (p if p.is_dir() else None,
                 f"$GRAVA_SRC={p}" + ("" if p.is_dir() else " (missing)"))
-    # Sibling-dir auto-detect: stellar-engine and grava typically live
-    # next to each other (e.g. ~/Space/stellar-engine + ~/Space/grava).
-    se_root = _repo_root()
-    sibling = (se_root.parent / "grava").resolve()
-    if sibling.is_dir():
-        return (sibling, f"sibling {sibling}")
+
+    tried: list[str] = []
+
+    # Sibling-dir auto-detect — ONLY for source runs. In the PyInstaller
+    # binary `_repo_root()` returns `sys._MEIPASS` (e.g. /tmp/_MEI123456),
+    # so its parent / "grava" resolves to `/tmp/grava` which is never
+    # what the operator means.
+    is_binary = getattr(sys, "_MEIPASS", None) is not None
+    if not is_binary:
+        se_root = Path(__file__).resolve().parent.parent
+        sibling = (se_root.parent / "grava").resolve()
+        if sibling.is_dir():
+            return (sibling, f"sibling {sibling}")
+        tried.append(f"sibling {sibling}")
+
+    # Common operator-clone locations. Probed for both source and binary
+    # installs so the binary user gets a working default without having
+    # to set $GRAVA_SRC for the typical layout.
+    home = Path.home()
+    for candidate in (home / "Space" / "grava",
+                      home / "src" / "grava",
+                      home / "grava"):
+        if candidate.is_dir():
+            return (candidate.resolve(), f"common-path {candidate}")
+        tried.append(str(candidate))
+
+    tried_str = ", ".join(tried) if tried else "no candidates"
     return (None,
             f"no grava clone found (tried --grava-src, $GRAVA_SRC, "
-            f"and sibling {sibling})")
+            f"{tried_str})")
 
 
 def _install_grava_assets(
