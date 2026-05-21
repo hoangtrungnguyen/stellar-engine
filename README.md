@@ -119,11 +119,14 @@ se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox
 # Orchestrator: route + dispatch grava issues to teams (fix-bug / qa / task-generator)
 # `se o` is shorthand for `se orchestrator` — both forms work identically.
 se o doctor --target-repo <repo>              # verify env for sub-pipelines
-se o pick --team fix-bug --target-repo <repo>          # next ready bug
 se o route <issue-id> --target-repo <repo>             # classify team
-se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0 (single issue)
+se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0 (single issue or auto-pick)
 se o deploy --all --team T --target-repo <repo>        # batch: Phase 0 for every ready issue
-se o expand <epic-id> --target-repo <repo>             # epic → task-generator
+se o deploy <epic-id> --target-repo <repo>             # epic → routes to task-generator
+se o start [--team T] [--attach]                       # tmux + Claude Code launcher
+# Listing ready issues (no longer a top-level `se o pick`):
+python3 agents/orchestrator/cli/pick_ready.py --team fix-bug --target-repo <repo>
+grava ready --json --limit 100
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture and [`docs/install.md`](docs/install.md) for build/release details.
