@@ -545,6 +545,13 @@ esac
 
 ## Hard Limits
 
+- **HARD REJECT on unresolved blockers.** `epic_task_claim.py` and
+  `fix_bug_claim.py` call `grava blocked <id> --json` before claiming and
+  exit 3 if any open blocker exists. No `--force` flag, no override. The
+  agent must resolve blockers upstream (close them, remove the edge, or wait
+  for completion) before re-running the claim. This applies even when the
+  operator picks an ID directly via `se o deploy <id>` — `grava ready`
+  filters at the queue level, but the per-claim gate is the canonical check.
 - Never `git push` or `gh pr create` without `fix_bug_verify.py` exit 0 in **this turn**.
 - Never call `/ship` on a `bug` type issue (fix-bug pipeline handles bugs).
 - Never trigger task-generator Phase B writes without explicit operator approval **this turn**.
@@ -602,8 +609,9 @@ Anything else requires operator confirmation.
 |---------|-------------|--------------|
 | `route.py` exit 1 | Unknown issue type or not found | `grava show <id> --json` to inspect |
 | `route.py` exit 2 | grava command failed | Check grava DB initialised in repo |
-| `fix_bug_claim.py` exit 1 | Not a bug type | Verify with `grava show <id> --json` |
-| `fix_bug_claim.py` exit 2 | `grava claim` failed | Another agent may have claimed; check status |
+| `fix_bug_claim.py` / `epic_task_claim.py` exit 1 | Wrong issue type | Verify with `grava show <id> --json` |
+| `fix_bug_claim.py` / `epic_task_claim.py` exit 2 | `grava claim` failed | Another agent may have claimed; check status |
+| `fix_bug_claim.py` / `epic_task_claim.py` exit 3 | **HARD REJECT** — unresolved blockers | Inspect with `grava blocked <id> --json`; close or remove blockers, then retry. No override. |
 | `fix_bug_verify.py` exit 5 | Tests fail, retry N of 2 | Fix failing checks in worktree, re-run |
 | `fix_bug_verify.py` exit 2 | Tests fail, max retries | Labeled `needs-human`; manual intervention required |
 | `fix_bug_pr.py` exit 1 | Self-verify not passed | Run `fix_bug_verify.py` first |

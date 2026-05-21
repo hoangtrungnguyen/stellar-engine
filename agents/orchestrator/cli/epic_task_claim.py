@@ -4,23 +4,28 @@ Epic-Task Phase 0: Claim a story/task issue and provision its worktree.
 
 Usage: python3 epic_task_claim.py <id> [--target-repo <path>] [--actor <name>]
 Output: JSON {id, worktree, branch, tech_plan_path|null, idempotent?}
+        Or on blocker rejection: JSON {error: "blocked", blockers: [{id, title, status}]}
 Exit codes:
   0 = claimed successfully (or already claimed — idempotent)
   1 = wrong type (not task/story/subtask) or issue not found
   2 = grava claim failed
+  3 = HARD REJECT — issue has unresolved blocking dependencies
 
 Algorithm:
   1. grava show <id> --json → verify type in {task, story, subtask}; exit 1 if not
   2. grava wisp read <id> pipeline_phase:
      if phase in CLAIMED_OR_LATER → exit 0 (idempotent, heartbeat updated)
-  3. grava claim <id> → provisions .worktree/<id>/ on branch grava/<id>
+  3. HARD REJECT: grava blocked <id> --json
+     if list is non-empty → exit 3 (do NOT claim, do NOT write wisps)
+     no --force flag — blockers must be resolved upstream first
+  4. grava claim <id> → provisions .worktree/<id>/ on branch grava/<id>
      exit 2 on failure
-  4. grava wisp write <id> team epic-task
-  5. grava wisp write <id> pipeline_phase claimed
-  6. grava wisp write <id> orchestrator_heartbeat <unix-timestamp>
-  7. Try grava signal ISSUE_CLAIMED (graceful fallback if signal unknown)
-  8. Resolve tech plan path via tech_plan_load.py; write wisp tech_plan_path if found
-  9. Print JSON {id, worktree, branch, tech_plan_path}
+  5. grava wisp write <id> team epic-task
+  6. grava wisp write <id> pipeline_phase claimed
+  7. grava wisp write <id> orchestrator_heartbeat <unix-timestamp>
+  8. Try grava signal ISSUE_CLAIMED (graceful fallback if signal unknown)
+  9. Resolve tech plan path via tech_plan_load.py; write wisp tech_plan_path if found
+  10. Print JSON {id, worktree, branch, tech_plan_path}
 
 Note: grava wisp read exits 1 on missing key — treat returncode=1 as "not set".
 """
@@ -53,6 +58,33 @@ def wisp_write(issue_id: str, key: str, value: str, cwd: str) -> None:
         ["grava", "wisp", "write", issue_id, key, value],
         capture_output=True, cwd=cwd,
     )
+
+
+def _check_blockers(issue_id: str, cwd: str) -> list[dict]:
+    """Return list of active blockers for issue_id (empty list = unblocked).
+
+    Calls `grava blocked <id> --json` which returns only OPEN blockers
+    (closed/tombstoned ones are excluded by default — no --all flag).
+    A non-empty list means the issue is HARD-REJECTED for claiming.
+    """
+    r = subprocess.run(
+        ["grava", "blocked", issue_id, "--json"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        # If the command fails (unsupported, etc.), do NOT silently allow —
+        # surface the failure so the operator notices.
+        print(
+            f"WARNING: `grava blocked` failed (exit {r.returncode}): "
+            f"{r.stderr.strip()}\nProceeding without blocker check.",
+            file=sys.stderr,
+        )
+        return []
+    try:
+        data = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
 
 
 def _resolve_tech_plan(target_repo: str) -> str:
@@ -125,7 +157,35 @@ def main(argv: list[str] | None = None) -> int:
         }))
         return 0
 
-    # 3. Claim — provisions .worktree/<id>/ on branch grava/<id>
+    # 3. HARD REJECT — if any unresolved blocker exists, refuse to claim.
+    #    grava claim itself does NOT validate this, so we gate it here.
+    #    No --force flag: blockers must be resolved upstream first.
+    blockers = _check_blockers(args.id, cwd)
+    if blockers:
+        blocker_summary = ", ".join(
+            f"{b.get('id', '?')} ({b.get('status', '?')})" for b in blockers[:5]
+        )
+        print(
+            f"REJECTED: {args.id} is blocked by {len(blockers)} unresolved "
+            f"dependency/dependencies: {blocker_summary}\n"
+            f"Resolve blockers first, then re-run.",
+            file=sys.stderr,
+        )
+        print(json.dumps({
+            "id": args.id,
+            "error": "blocked",
+            "blockers": [
+                {
+                    "id": b.get("id", ""),
+                    "title": b.get("title", ""),
+                    "status": b.get("status", ""),
+                }
+                for b in blockers
+            ],
+        }))
+        sys.exit(3)
+
+    # 4. Claim — provisions .worktree/<id>/ on branch grava/<id>
     claim_r = subprocess.run(
         ["grava", "claim", args.id],
         capture_output=True, text=True, cwd=cwd,
@@ -138,23 +198,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         sys.exit(2)
 
-    # 4–6. Write initial wisps
+    # 5–7. Write initial wisps
     wisp_write(args.id, "team", "epic-task", cwd)
     wisp_write(args.id, "pipeline_phase", "claimed", cwd)
     wisp_write(args.id, "orchestrator_heartbeat", str(int(time.time())), cwd)
 
-    # 7. Structured signal (graceful fallback if signal unknown)
+    # 8. Structured signal (graceful fallback if signal unknown)
     subprocess.run(
         ["grava", "signal", "ISSUE_CLAIMED", "--issue", args.id, "--actor", args.actor],
         capture_output=True, cwd=cwd,
     )
 
-    # 8. Resolve and store tech plan path so agent can load it without re-running lookup
+    # 9. Resolve and store tech plan path so agent can load it without re-running lookup
     tech_plan_path = _resolve_tech_plan(cwd)
     if tech_plan_path:
         wisp_write(args.id, "tech_plan_path", tech_plan_path, cwd)
 
-    # 9. Output
+    # 10. Output
     print(json.dumps({
         "id": args.id,
         "worktree": worktree,
