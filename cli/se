@@ -884,6 +884,77 @@ _GRAVA_SKILLS = (
 )
 
 
+_GRAVA_INSTALL_URL = (
+    "https://raw.githubusercontent.com/hoangtrungnguyen/grava/main/scripts/install.sh"
+)
+
+
+def _ensure_grava_binary(*, auto_install: bool = True) -> bool:
+    """Make sure the `grava` CLI is on PATH; install it via curl if missing.
+
+    On a fresh machine the operator may not have grava installed yet.
+    `se repos add` is the bootstrap entry point — it needs `grava` to run
+    `grava init` in the target repo. Instead of failing, fetch the binary
+    via grava's official install script (same one documented in grava's README).
+
+    Returns True if grava is available after this call, False if install
+    was disabled or failed.
+    """
+    if shutil.which("grava") is not None:
+        return True
+
+    if not auto_install:
+        return False
+
+    if shutil.which("curl") is None or shutil.which("bash") is None:
+        print(
+            "ERROR: grava not on PATH and curl/bash unavailable for auto-install.\n"
+            f"  Install manually: curl -sL {_GRAVA_INSTALL_URL} | bash",
+            file=sys.stderr,
+        )
+        return False
+
+    print(f"  installing grava (curl -sL {_GRAVA_INSTALL_URL} | bash)")
+    try:
+        # Use a pipeline so the install script's output streams to the
+        # operator's terminal — they see the download/install progress.
+        r = subprocess.run(
+            f"curl -sL {_GRAVA_INSTALL_URL} | bash",
+            shell=True, check=False,
+        )
+    except OSError as exc:
+        print(f"  install failed: {exc}", file=sys.stderr)
+        return False
+
+    if r.returncode != 0:
+        print(
+            f"  install failed (exit {r.returncode}). Install manually:\n"
+            f"  curl -sL {_GRAVA_INSTALL_URL} | bash",
+            file=sys.stderr,
+        )
+        return False
+
+    # grava's install.sh drops the binary in ~/.local/bin by default — that
+    # might not be on PATH yet in this process. Re-probe with the standard
+    # install location appended.
+    if shutil.which("grava") is not None:
+        return True
+    local_bin = Path.home() / ".local" / "bin"
+    if (local_bin / "grava").is_file():
+        os.environ["PATH"] = f"{local_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+        if shutil.which("grava") is not None:
+            print(f"  added {local_bin} to PATH for this process")
+            return True
+
+    print(
+        "  grava installed but not on PATH yet. Add this to your shell rc:\n"
+        f"    export PATH=\"$HOME/.local/bin:$PATH\"\n"
+        "  then re-run `se repos add`.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
     """Resolve the grava source clone path.
 
@@ -894,17 +965,19 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
     Lookup chain (first match wins):
       1. --grava-src PATH                  (explicit flag)
       2. $GRAVA_SRC                        (env var; matches grava install docs)
-      3. <stellar-engine>/../grava sibling (SOURCE runs only — `_repo_root()`
+      3. <bundle>/vendored/grava           (PyInstaller binary: assets vendored
+                                            at build time — no clone needed.
+                                            scripts/vendor-grava-assets.sh
+                                            populates this dir.)
+      4. <stellar-engine>/../grava sibling (SOURCE runs only — `_repo_root()`
                                             points at /tmp/_MEIxxx for the
                                             PyInstaller binary, so sibling
                                             detect is meaningless there)
-      4. Common operator clone locations:
+      5. Common operator clone locations:
            ~/Space/grava, ~/src/grava, ~/IdeaProjects/grava,
            ~/Projects/grava, ~/code/grava, ~/grava
                                             (probed for source AND binary
-                                             installs so the binary user
-                                             gets a working default without
-                                             setting $GRAVA_SRC)
+                                             installs as a fallback)
     """
     if explicit:
         p = Path(explicit).expanduser().resolve()
@@ -915,6 +988,14 @@ def _resolve_grava_src(explicit: str | None) -> tuple[Path | None, str]:
         p = Path(env).expanduser().resolve()
         return (p if p.is_dir() else None,
                 f"$GRAVA_SRC={p}" + ("" if p.is_dir() else " (missing)"))
+
+    # Bundled assets — built into the PyInstaller binary or present in the
+    # source tree after scripts/vendor-grava-assets.sh runs locally. This is
+    # the path that makes `se repos add` work on a fresh machine with no
+    # grava clone (the assets travel with the binary).
+    bundled = _repo_root() / "vendored" / "grava"
+    if (bundled / ".claude" / "agents").is_dir():
+        return (bundled, f"bundled {bundled}")
 
     tried: list[str] = []
 
@@ -1091,6 +1172,11 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
     if not repo_path.is_dir():
         print(f"ERROR: {repo_path} is not a directory.", file=sys.stderr)
         sys.exit(1)
+
+    # Ensure the grava CLI is available — auto-install on a fresh machine.
+    # Skip when --no-init is given (operator already chose not to run grava).
+    if not args.no_init:
+        _ensure_grava_binary(auto_install=True)
 
     # grava init (skipped if .grava/ already present, or --no-init given)
     grava_marker = repo_path / ".grava"

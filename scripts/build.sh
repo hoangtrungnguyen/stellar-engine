@@ -113,6 +113,16 @@ else
     pip install --quiet pyinstaller pyyaml markdown markdownify requests
 fi
 
+# ── vendor grava assets ───────────────────────────────────────────────────────
+#
+# Fetch grava's .claude/{agents,skills}/ into vendored/grava/ so PyInstaller
+# bundles them. At runtime `_resolve_grava_src` prefers the bundled copy —
+# `se repos add` no longer needs the operator to have a grava clone on disk.
+# Re-runs every build to pick up grava upstream changes (release-time pin).
+
+echo "▸ vendoring grava .claude assets"
+bash "$REPO_ROOT/scripts/vendor-grava-assets.sh" 2>&1 | tail -3
+
 # ── data bundling ─────────────────────────────────────────────────────────────
 #
 # PyInstaller extracts everything under sys._MEIPASS at runtime. The `se`
@@ -127,6 +137,7 @@ ADD_DATA=(
     "--add-data" "$REPO_ROOT/download_project_pages.py:."
     "--add-data" "$REPO_ROOT/upload_project_pages.py:."
     "--add-data" "$REPO_ROOT/upload_wiki_page.py:."
+    "--add-data" "$REPO_ROOT/vendored:vendored"
 )
 
 # ── build ─────────────────────────────────────────────────────────────────────
