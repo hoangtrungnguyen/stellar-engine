@@ -2,21 +2,28 @@
 
 ## Status
 
-🟩 **D1 tick loop landed** (2026-05-21). `se orchestrator run` now:
-- Loads `repos.yaml`, polls every entry on the min `poll_interval`
-  cadence across the fleet (default 60s).
-- Per repo: skips on `.grava/orchestrator-paused`, otherwise scans
-  in-flight pipelines and dispatches Phase 0 for each team where
-  `in_flight < max_concurrent` and `pick_ready` returns a candidate.
-- `--once` runs a single tick then exits.
-- Honours `SIGINT` and `SIGTERM`: finishes the current tick, writes
-  the state file, exits 0.
-- Atomic-writes daemon state to
-  `~/.local/share/stellar-engine/daemon.json` after each tick.
+🟩 **D0 + D1 + D6 landed** (2026-05-21). `se orchestrator run` now
+runs **two cadences in one process**:
 
-D2–D6 still to do. The one-shot CLI wrappers shipped today
-(`se orchestrator deploy`, `route`, `pick`, `fix-bug *`, `qa *`,
-`expand`, `doctor`) remain available for operator-driven workflows.
+- **Backlog ticker** (60s, D1): loads `repos.yaml`, scans in-flight
+  pipelines, dispatches Phase 0 per team where
+  `inflight < max_concurrent`. Respects `.grava/orchestrator-paused`.
+- **PR-lifecycle ticker** (300s, D6 — absorbs the deleted
+  `pr_merge_watcher.sh`): per-repo `PRWatcher.tick()` over issues
+  labeled `pr-created`. MERGED → close + signal chain. CLOSED → label
+  `pr-rejected` + re-entry hint by team. OPEN → stale check (>72h) +
+  comment-delta detection. Centralized `pr_state` wisp schema.
+
+Both share `SIGINT`/`SIGTERM` graceful drain, atomic state file
+(`~/.local/share/stellar-engine/daemon.json` with `last_tick` AND
+`last_pr_tick`), and per-repo singleton via `fcntl.flock` on
+`.grava/pr-watcher.lock` (replaces the bash watcher's pidfile dance).
+
+D2 (heartbeat watcher) and D3 (failure-streak pause) still to do.
+The one-shot CLI wrappers shipped earlier (`se orchestrator deploy`,
+`route`, `pick`, `fix-bug *`, `qa *`, `expand`, `doctor`, plus the
+new `se orchestrator pr-watch --once`) remain available for
+operator-driven workflows.
 
 The daemon replaces "operator-as-loop" with a long-running process that
 polls the grava backlog, dispatches ready issues to teams, and respects
@@ -195,10 +202,17 @@ Reads from grava wisps + daemon state file. Does not mutate.
 ## Critical files (when built)
 
 **New**:
-- `agents/orchestrator/cli/daemon.py` — tick loop, signal handling.
-  ✅ D0 scaffold + ✅ D1 tick loop landed. Self-contained (no
-  `runtime.py` extraction yet — moves out when D2 needs to share
-  helpers).
+- `agents/orchestrator/cli/daemon.py` — tick loop, signal handling,
+  two-cadence scheduler. ✅ D0 scaffold + ✅ D1 backlog tick + ✅ D6
+  pr-lifecycle tick landed.
+- `agents/orchestrator/cli/pr_watch.py` — standalone single-shot CLI
+  for `se orchestrator pr-watch --once`. ✅ D6.
+- `agents/orchestrator/runtime/{pr_state,pr_watcher}.py` +
+  `runtime/adapters/{grava,github}.py` — Python port of the bash
+  watcher with the centralized `pr_state` wisp schema. ✅ D6.
+- `agents/orchestrator/tests/runtime/{test_pr_state,test_pr_watcher}.py`
+  — 30 tests; pure transition + integration with stubbed adapters.
+  ✅ D6.
 - `agents/orchestrator/cli/status.py` — read-only status renderer.
 - `agents/orchestrator/runtime.py` — shared helpers (in-flight counting,
   state-file I/O, policy loading).
@@ -220,9 +234,10 @@ Reads from grava wisps + daemon state file. Does not mutate.
   lands. Add `se orchestrator run` to the operator entry points.
 - `scripts/install.sh` — `--enable-daemon` flag.
 
-**Delete (in D6)**:
-- `agents/orchestrator/scripts/pr_merge_watcher.sh` and the
-  `_check_cron` row in `cli/se`'s doctor checks.
+**Deleted (D6 — done)**:
+- `agents/orchestrator/scripts/pr_merge_watcher.sh` removed.
+- `_check_cron` in `cli/se` repurposed as a one-way detection: errors
+  when a stale crontab line still references the deleted script.
 
 ## Verification
 

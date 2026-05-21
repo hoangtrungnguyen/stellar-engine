@@ -62,6 +62,13 @@ except ImportError:
           file=sys.stderr)
     sys.exit(1)
 
+# Make the sibling `runtime/` package importable when daemon.py is run
+# either as a script (`python3 daemon.py`) or loaded by cli/se's
+# `_orch_invoke`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from runtime.pr_watcher import PRWatcher                                # noqa: E402
+
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -78,7 +85,8 @@ TEAM_PHASE0_SCRIPT = {
     "task-generator": "task_gen_expand.py",
 }
 
-DEFAULT_POLL_INTERVAL = 60          # seconds; matches repos.yaml default
+DEFAULT_POLL_INTERVAL = 60          # backlog ticker (D1) — matches repos.yaml default
+PR_WATCHER_INTERVAL = 300           # pr-lifecycle ticker (D6) — matches old cron cadence
 MIN_SLEEP_BETWEEN_TICKS = 5         # safety lower bound, even if config is broken
 PAUSED_MARKER = ".grava/orchestrator-paused"
 
@@ -423,31 +431,78 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, shutdown.request)
     signal.signal(signal.SIGTERM, shutdown.request)
 
-    sleep_seconds = _min_poll_interval(repos)
+    backlog_interval = _min_poll_interval(repos)
     started_at = int(time.time())
     tick_count = 0
+    pr_tick_count = 0
+    pr_watcher = PRWatcher()
+    # Both tickers fire immediately on startup (next_due = 0). After
+    # that they advance by their own interval. The min(next_due) is
+    # what the main loop waits for.
+    backlog_next_due = 0.0
+    prwatcher_next_due = 0.0
+    last_backlog_result: TickResult | None = None
+    last_pr_summary: dict | None = None
 
     while True:
-        tick_count += 1
-        log.info("tick %d start (%d repos)", tick_count, len(repos))
-        result = _tick(repos)
-        log.info(
-            "tick %d done: dispatched=%d skipped_capacity=%d paused=%d errors=%d",
-            tick_count, result.dispatches, result.skipped_capacity,
-            result.repos_paused, len(result.errors),
-        )
+        now = time.time()
+
+        # ── backlog ticker (D1) ──
+        if now >= backlog_next_due:
+            tick_count += 1
+            log.info("backlog tick %d start (%d repos)", tick_count, len(repos))
+            last_backlog_result = _tick(repos)
+            log.info(
+                "backlog tick %d done: dispatched=%d skipped_capacity=%d paused=%d errors=%d",
+                tick_count, last_backlog_result.dispatches,
+                last_backlog_result.skipped_capacity,
+                last_backlog_result.repos_paused,
+                len(last_backlog_result.errors),
+            )
+            backlog_next_due = now + backlog_interval
+
+        # ── pr-lifecycle ticker (D6) ──
+        if now >= prwatcher_next_due:
+            pr_tick_count += 1
+            log.info("pr-watcher tick %d start (%d repos)",
+                     pr_tick_count, len(repos))
+            pr_events = 0
+            pr_repos_scanned = 0
+            for name, cfg in repos.items():
+                if not cfg.path.is_dir():
+                    continue
+                if _is_paused(cfg.path):
+                    continue
+                report = pr_watcher.tick(cfg.path)
+                pr_events += len(report.events)
+                pr_repos_scanned += 1
+            last_pr_summary = {
+                "tick": pr_tick_count,
+                "repos_scanned": pr_repos_scanned,
+                "events": pr_events,
+                "at": int(now),
+            }
+            log.info(
+                "pr-watcher tick %d done: repos=%d events=%d",
+                pr_tick_count, pr_repos_scanned, pr_events,
+            )
+            prwatcher_next_due = now + PR_WATCHER_INTERVAL
+
+        # ── persist state ──
         _write_state(state_dir, {
             "started_at": started_at,
-            "last_tick_at": result.ts,
+            "last_tick_at": int(now),
             "tick_count": tick_count,
+            "pr_tick_count": pr_tick_count,
             "repos": list(repos),
             "last_tick": {
-                "polled": result.repos_polled,
-                "paused": result.repos_paused,
-                "dispatches": result.dispatches,
-                "skipped_capacity": result.skipped_capacity,
-                "errors": result.errors,
+                "polled": last_backlog_result.repos_polled if last_backlog_result else 0,
+                "paused": last_backlog_result.repos_paused if last_backlog_result else 0,
+                "dispatches": last_backlog_result.dispatches if last_backlog_result else 0,
+                "skipped_capacity": last_backlog_result.skipped_capacity if last_backlog_result else 0,
+                "errors": last_backlog_result.errors if last_backlog_result else [],
             },
+            "last_pr_tick": last_pr_summary or {},
         })
 
         if args.once or shutdown.stop:
@@ -455,7 +510,9 @@ def main(argv: list[str] | None = None) -> int:
                      args.once, shutdown.stop)
             return 0
 
-        # Sleep in small chunks so SIGINT is responsive.
+        # Sleep until the next ticker is due. Chunked in 1s slices so
+        # SIGINT is responsive even with a 300s pr-watcher ticker.
+        sleep_seconds = max(1, int(min(backlog_next_due, prwatcher_next_due) - now))
         slept = 0
         while slept < sleep_seconds and not shutdown.stop:
             time.sleep(min(1, sleep_seconds - slept))
