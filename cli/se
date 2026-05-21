@@ -2250,6 +2250,7 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             sys.exit(0)
 
         dispatched: list[str] = []
+        blocked: list[str] = []          # exit 3 from claim — skip, NOT a failure
         failed: list[tuple[str, int]] = []
 
         for idx, iid in enumerate(ids, start=1):
@@ -2272,6 +2273,11 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             rc = _orch_dispatch_phase0(iid, team, target_repo)
             if rc == 0:
                 dispatched.append(iid)
+            elif rc == 3:
+                # Hard-reject for unresolved blockers — NOT a failure.
+                # The loop continues; --stop-on-error does NOT trigger.
+                print(f"  skipped {iid} (exit=3, blocked by deps)")
+                blocked.append(iid)
             else:
                 failed.append((iid, rc))
                 if args.stop_on_error:
@@ -2280,14 +2286,19 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         # Batch summary
         print(f"\n── Batch summary (team={team}) ──")
         print(f"  dispatched: {len(dispatched)}  "
+              f"blocked: {len(blocked)}  "
               f"failed: {len(failed)}  "
               f"of {len(ids)} candidates")
         for iid, rc in failed:
             print(f"  failed {iid}: exit={rc}")
-        if not dispatched and not failed:
+        if blocked:
+            print(f"  hint: inspect blockers with "
+                  f"`grava blocked <id> --json` in the repo.")
+        if not dispatched and not blocked and not failed:
             # All candidates silently skipped (route mismatch).
             print(f"  note:       none of the {len(ids)} candidates routed to "
                   f"team={team}; nothing dispatched.")
+        # Exit 0 if only failures are absent. Blocked is normal and expected.
         sys.exit(0 if not failed else 1)
 
     # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────

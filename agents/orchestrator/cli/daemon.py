@@ -119,6 +119,7 @@ class TickResult:
     repos_paused: int = 0
     dispatches: int = 0
     skipped_capacity: int = 0
+    skipped_blocked: int = 0     # Phase 0 claim exit 3 — unresolved blockers, NOT an error
     errors: list[str] = field(default_factory=list)
 
 
@@ -335,6 +336,15 @@ def _tick(repos: dict[str, RepoConfig]) -> TickResult:
                 # for the next tick. Within this tick, increment locally
                 # so we don't overshoot max_concurrent on the same team.
                 counts[team] += 1
+            elif rc == 3:
+                # Hard-reject for unresolved blockers. NOT an error — the
+                # loop continues to the next ready issue. `grava ready`
+                # normally filters blocked items, so this fires only on a
+                # rare race where a blocker was added between pick and
+                # dispatch. Don't increment counts[team]: no claim happened.
+                log.info("%s: %s phase0 for %s skipped (blocked by deps)",
+                         name, team, issue_id)
+                result.skipped_blocked += 1
             else:
                 log.warning("%s: %s phase0 for %s exited %d",
                             name, team, issue_id, rc)
@@ -469,9 +479,11 @@ def main(argv: list[str] | None = None) -> int:
             log.info("backlog tick %d start (%d repos)", tick_count, len(repos))
             last_backlog_result = _tick(repos)
             log.info(
-                "backlog tick %d done: dispatched=%d skipped_capacity=%d paused=%d errors=%d",
+                "backlog tick %d done: dispatched=%d skipped_capacity=%d "
+                "skipped_blocked=%d paused=%d errors=%d",
                 tick_count, last_backlog_result.dispatches,
                 last_backlog_result.skipped_capacity,
+                last_backlog_result.skipped_blocked,
                 last_backlog_result.repos_paused,
                 len(last_backlog_result.errors),
             )
@@ -516,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
                 "paused": last_backlog_result.repos_paused if last_backlog_result else 0,
                 "dispatches": last_backlog_result.dispatches if last_backlog_result else 0,
                 "skipped_capacity": last_backlog_result.skipped_capacity if last_backlog_result else 0,
+                "skipped_blocked": last_backlog_result.skipped_blocked if last_backlog_result else 0,
                 "errors": last_backlog_result.errors if last_backlog_result else [],
             },
             "last_pr_tick": last_pr_summary or {},
