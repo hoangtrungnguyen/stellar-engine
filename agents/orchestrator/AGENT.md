@@ -2,9 +2,9 @@
 name: orchestrator
 description: >
   Routes grava issues to specialized teams based on issue type. Four teams:
-  task-generator (epics), fix-bug (bugs), epic-task (/ship for tasks/stories),
-  QA (qa-ready label). Manages concurrency and cross-team state via grava wisps.
-  Entry commands: /deploy and /qa and /generate.
+  task-generator (epics), fix-bug (bugs), epic-task (claim→implement→ship for
+  tasks/stories), QA (qa-ready label). Manages concurrency and cross-team state
+  via grava wisps. Entry commands: /deploy, /qa, /generate.
 ---
 
 # Orchestrator Agent
@@ -28,7 +28,7 @@ Grava issues
 Orchestrator routing
   ├── epic        → task-generator team  (expand spec into children)
   ├── bug         → fix-bug team         (claim → fix → verify → PR)
-  ├── task/story  → epic-task team       (/ship pipeline)
+  ├── task/story  → epic-task team       (claim → tech plan → implement → ship)
   └── qa-ready    → qa team             (checklist → review → report)
 ```
 
@@ -69,12 +69,11 @@ se o qa load   <id> [--checklist P|--type T]   # Phase 0
 se o qa report <id> --results-file P           # Phase 2
 ```
 
-`deploy` routes the issue, then fires the team's Phase 0 (`fix_bug_claim`,
-`qa_load`, or `task_gen_expand`). For `epic-task` (task/story) it prints
-a hint to run `/ship <id>` inside Claude Code — no `se` equivalent yet.
-Multi-phase pipelines still need operator action between phases (the
-`Fix` / `Review` steps happen in Claude Code; only Phase 0 / 2 / 3 are
-CLI-driven).
+`deploy` routes the issue, then fires the team's Phase 0
+(`fix_bug_claim`, `qa_load`, `task_gen_expand`, or `epic_task_claim`).
+Multi-phase pipelines still need agent action between phases (the
+`Fix` / `Review` / `Implement` steps happen in Claude Code; only Phase 0
+/ 2 / 3 are CLI-driven).
 
 **Batch mode (`--all`).** When the operator wants Phase 0 fired for every
 ready issue on a team in a single repo (not just the next one), add
@@ -83,19 +82,16 @@ ready issue on a team in a single repo (not just the next one), add
 
 Two guardrails:
 
-1. **Batch-team gate.** Four team values are valid for `--all`:
-   - `fix-bug`, `qa`, `task-generator` — **agent-teams**: real Phase 0
-     dispatch via the corresponding script (`fix_bug_claim`, `qa_load`,
-     `task_gen_expand`).
-   - `epic-task` — **hint-only**: no `se`-side dispatch script; the loop
-     iterates every ready story/task and prints a `/ship <id>` hint per
-     issue, then enumerates them again in the summary so the operator
-     can paste each into Claude Code one by one.
+1. **Batch-team gate.** All four teams are valid for `--all` — each has a
+   Phase 0 dispatch script:
+   - `fix-bug`       → `fix_bug_claim.py`
+   - `qa`            → `qa_load.py`
+   - `task-generator` → `task_gen_expand.py`
+   - `epic-task`     → `epic_task_claim.py`
 
    Any team value outside this set is rejected with a "not a valid batch
-   target — nothing to do" message and exit 0. The constants
-   `_AGENT_TEAMS`, `_HINT_ONLY_TEAMS`, and `_BATCH_TEAMS` in `cli/se`
-   are the single source of truth.
+   target — nothing to do" message and exit 0. The constants `_AGENT_TEAMS`
+   and `_BATCH_TEAMS` in `cli/se` are the single source of truth.
 
 2. **Silent skip on team mismatch.** Per-issue, if a picked candidate's
    route resolves to a different team than `--team T` (rare — would
@@ -104,25 +100,19 @@ Two guardrails:
    bump. "If the issues do not belong to a batch team, do nothing."
 
 **Empty-queue report.** When `pick_ready` returns zero ready issues for
-a valid batch-team, `--all` emits a structured notification report
-instead of a bare line — repo path, ready-issue count (0), and a hint
-about how to inspect in-flight items (`se o pick`, `grava list`). For
-agent-teams the note reads "nothing dispatched; no Phase 0 fired"; for
-hint-only teams (`epic-task`) it reads "nothing hinted; team=epic-task
-loops emit `/ship <id>` hints but require Claude Code to actually ship."
-Exit code stays 0.
+a valid batch-team, `--all` emits a structured notification report —
+repo path, ready-issue count (0), and a hint about how to inspect in-flight
+items (`se o pick`, `grava list`). The note reads "nothing dispatched;
+no Phase 0 fired." Exit code stays 0.
 
-**Batch summary** distinguishes the two outcomes:
+**Batch summary**:
 
 ```
 ── Batch summary (team=fix-bug) ──
   dispatched: 3  failed: 0  of 3 candidates
 
 ── Batch summary (team=epic-task) ──
-  hinted:     2  failed: 0  of 2 candidates
-  next:       run each in Claude Code:
-                /ship grava-96c8
-                /ship grava-a9c6
+  dispatched: 2  failed: 0  of 2 candidates
 ```
 
 Default behaviour is continue-on-error: a per-issue failure logs a
@@ -136,8 +126,8 @@ Phase 0 steps. This is a one-tick batch — it does not respect the daemon
 plan's `max_concurrent` cap (that lives in `se o run`, not yet built).
 
 Single-issue mode (`se o deploy <id>` and `se o deploy --team T` without
-`--all`) is unchanged — it still prints the `/ship` hint for `epic-task`
-issues so operators see what to do next.
+`--all`) fires Phase 0 for one issue and exits — the agent then continues
+the pipeline (implement → ship).
 
 A continuous-loop daemon (`se o run --repo <path>` polling
 the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
@@ -190,12 +180,12 @@ ROUTE=$(python3 agents/orchestrator/cli/route.py "$ISSUE_ID" --target-repo "$REP
 TEAM=$(echo "$ROUTE" | jq -r '.team')
 ```
 
-| team             | Action                                                    |
-|------------------|-----------------------------------------------------------|
-| `task-generator` | Run `task_gen_expand.py <id>` (requires operator approval)|
-| `fix-bug`        | Fix-bug pipeline (claim → fix → verify → PR)              |
-| `epic-task`      | `/ship <id>` (existing pipeline)                          |
-| `qa`             | QA pipeline (checklist → review → report)                 |
+| team             | Action                                                              |
+|------------------|---------------------------------------------------------------------|
+| `task-generator` | Run `task_gen_expand.py <id>` (requires operator approval)          |
+| `fix-bug`        | Fix-bug pipeline (claim → fix → verify → PR)                        |
+| `epic-task`      | Epic-task pipeline (claim → load tech plan → implement → ship)      |
+| `qa`             | QA pipeline (checklist → review → report)                           |
 
 ### Without `<id>` (auto-pick)
 
@@ -355,6 +345,80 @@ NEW=$(grava wisp read "$ID" pr_new_comments)
 If non-empty: spawn fixer agent to address comments, push update, clear wisp:
 ```bash
 grava wisp write "$ID" pr_new_comments ""
+```
+
+---
+
+## Epic-Task Pipeline
+
+Stories and tasks routed to the `epic-task` team go through this four-phase
+pipeline. Phase 0 is CLI-driven; Phases 1–3 are agent-driven inside Claude Code.
+
+### Phase 0: Claim + provision worktree
+
+```bash
+python3 agents/orchestrator/cli/epic_task_claim.py "$ID" --target-repo "$REPO"
+# → JSON {id, worktree, branch, tech_plan_path|null}
+# Sets: pipeline_phase=claimed, team=epic-task, tech_plan_path (if found)
+# Provisions .worktree/<id>/ on branch grava/<id>
+```
+
+Verifies the issue type is `task` / `story` / `subtask`. Bug-type issues
+must go through the fix-bug pipeline; epics through task-generator.
+Idempotent — re-running on a claimed issue just refreshes the heartbeat.
+
+### Phase 1: Load context
+
+Tech plan was already loaded at session start (see Task-Generator Team
+Session Init above — the same load applies to epic-task sessions). The agent
+also reads:
+
+```bash
+cd .worktree/$ID/
+grava show "$ID" --json    # full issue body, labels, links
+```
+
+Acceptance criteria, design hints, and spec page references live in the
+issue body. The agent uses the tech plan to verify the work is in scope
+and to inform decomposition.
+
+### Phase 2: Implement
+
+Write code in `.worktree/<id>/` per the issue spec. Keep wisps current:
+
+```bash
+grava wisp write "$ID" step coding
+grava wisp write "$ID" orchestrator_heartbeat "$(date -u +%s)"
+```
+
+Run the project's test/lint/build commands locally. When the implementation
+is complete and tests pass:
+
+```bash
+grava wisp write "$ID" step coding_complete
+```
+
+### Phase 3: Ship
+
+Hand off to the target repo's `/ship` skill — it handles review and PR
+creation. From inside the agent session:
+
+```
+/ship <ID>
+```
+
+`/ship` emits `CODER_DONE` → `PR_CREATED` signals which sync to grava
+wisps automatically. The PR merge watcher (`pr_merge_watcher.sh`) takes
+over from here.
+
+### Re-entry detection
+
+```bash
+PHASE=$(grava wisp read "$ID" pipeline_phase)
+# claimed         → resume at Phase 2 (implement)
+# coding_complete → resume at Phase 3 (/ship)
+# pr_created      → check pr_new_comments; address if non-empty
+# complete        → done
 ```
 
 ---
