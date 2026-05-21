@@ -1797,7 +1797,6 @@ def cmd_plane_sync(args: argparse.Namespace) -> None:
 #
 # Subcommand tree:
 #   se orchestrator route       <id>
-#   se orchestrator pick        --team {fix-bug|epic-task|qa|task-generator}
 #   se orchestrator doctor
 #   se orchestrator fix-bug claim   <id>
 #   se orchestrator fix-bug verify  <id>
@@ -1895,21 +1894,10 @@ def _orch_route_argv(issue_id: str, target_repo: str) -> list[str]:
     return [issue_id, "--target-repo", target_repo]
 
 
-def _orch_pick_argv(team: str, target_repo: str, limit: int) -> list[str]:
-    return ["--team", team, "--target-repo", target_repo, "--limit", str(limit)]
-
-
 def cmd_orchestrator_route(args: argparse.Namespace) -> None:
     sys.exit(_orch_invoke(
         "route.py", "orch_route",
         _orch_route_argv(args.id, args.target_repo),
-    ))
-
-
-def cmd_orchestrator_pick(args: argparse.Namespace) -> None:
-    sys.exit(_orch_invoke(
-        "pick_ready.py", "orch_pick_ready",
-        _orch_pick_argv(args.team, args.target_repo, args.limit),
     ))
 
 
@@ -2228,8 +2216,9 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             print(f"  repo:   {target_repo}")
             print(f"  ready:  0 issues")
             print(f"  hint:   inspect in-flight items with "
-                  f"`se o pick --team {team} --target-repo {target_repo}` "
-                  f"and `grava list` in the repo.")
+                  f"`grava ready --json` and `grava list` in the repo, "
+                  f"or `python3 agents/orchestrator/cli/pick_ready.py "
+                  f"--team {team}` for the raw ready list.")
             print(f"  note:   nothing dispatched; no Phase 0 fired.")
             sys.exit(0)
 
@@ -2597,14 +2586,13 @@ def main() -> None:
     p_orch_route.add_argument("id", help="Grava issue ID")
     p_orch_route.add_argument("--target-repo", default=".", metavar="PATH")
 
-    # se orchestrator pick --team T
-    p_orch_pick = orch_sub.add_parser("pick", help="Next ready issue for a team")
-    p_orch_pick.add_argument(
-        "--team", required=True,
-        choices=("fix-bug", "epic-task", "qa", "task-generator"),
-    )
-    p_orch_pick.add_argument("--limit", type=int, default=1)
-    p_orch_pick.add_argument("--target-repo", default=".", metavar="PATH")
+    # NOTE: `se o pick` was removed. The picker logic still ships as
+    # `agents/orchestrator/cli/pick_ready.py` and is invoked internally
+    # by `cmd_orchestrator_deploy` (via `_orch_pick_ids`) for the `--all`
+    # batch loop and the no-arg auto-pick path. Operators who need the
+    # raw ready list can call the script directly:
+    #   python3 agents/orchestrator/cli/pick_ready.py --team T --limit N
+    #   grava ready --json --limit N
 
     # se orchestrator doctor
     p_orch_doc = orch_sub.add_parser(
@@ -2783,7 +2771,7 @@ def main() -> None:
     if args.cmd in ("orchestrator", "o"):
         orch_table = {
             "route":  cmd_orchestrator_route,
-            "pick":   cmd_orchestrator_pick,
+            # NOTE: `pick` removed — call pick_ready.py / `grava ready` directly.
             "doctor": cmd_orchestrator_doctor,
             # NOTE: `expand` removed — use `deploy <epic-id>` instead.
             "deploy": cmd_orchestrator_deploy,
