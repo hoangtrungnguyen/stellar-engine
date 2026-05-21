@@ -87,14 +87,17 @@ python3 cli/se taskgen <project_id> <page_id> --yes        # writes Plane + Grav
 # Orchestrator: route + dispatch grava issues to teams
 # `se o` is a shorthand alias for `se orchestrator` — both forms work identically.
 python3 cli/se o route <issue_id> --target-repo <path>
-python3 cli/se o pick --team fix-bug --target-repo <path>
 python3 cli/se o deploy [<id>] [--team T] --target-repo <path>  # routes + Phase 0 (single)
 python3 cli/se o deploy --all --team T --target-repo <path>     # batch: every ready issue on team T
-python3 cli/se o expand <epic-id> --target-repo <path>          # epic → task-generator
+python3 cli/se o deploy <epic-id> --target-repo <path>          # epic → routes to task-generator
+python3 cli/se o start [--team T] [--attach] --target-repo <path>  # tmux + Claude Code launcher
 python3 cli/se o fix-bug claim|verify|pr <id> --target-repo <path>
 python3 cli/se o qa load|report <id> --target-repo <path>
 python3 cli/se o doctor --target-repo <path>
-# (or the raw script: python3 agents/orchestrator/cli/{route,pick_ready,...}.py)
+# Listing ready issues (no top-level `se o pick`):
+python3 agents/orchestrator/cli/pick_ready.py --team fix-bug --target-repo <path>
+grava ready --json --limit 100
+# (or the raw scripts: python3 agents/orchestrator/cli/{route,pick_ready,task_gen_expand,…}.py)
 
 # Sync local markdown to Plane
 python3 upload_project_pages.py <project-uuid> docs/
