@@ -171,6 +171,53 @@ def _load_repos(base: Path) -> dict[str, dict]:
     return data.get("repos") or {}
 
 
+def _resolve_named_repo(name: str, base: Path) -> Path:
+    """Resolve a repo NAME → absolute path via repos.yaml.
+
+    Raises SystemExit(2) with a helpful message if the name is not registered
+    or repos.yaml is missing. Used by `se o deploy --repo NAME` (and any
+    other operator command that should refuse to operate on unregistered
+    repos — name-based addressing prevents typos and stops the operator
+    from deploying to the wrong directory).
+    """
+    repos = _load_repos(base)
+    if not repos:
+        print(
+            f"ERROR: no repos registered. repos.yaml not found at {base}/repos.yaml "
+            f"or empty.\n"
+            f"Fix: `se init --dir {base}` then `se repos add <name> --path <abs-path>`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if name not in repos:
+        registered = ", ".join(sorted(repos.keys())) or "(none)"
+        print(
+            f"ERROR: repo '{name}' not registered in repos.yaml.\n"
+            f"Registered repos: {registered}\n"
+            f"Fix: `se repos add {name} --path <abs-path>` or check spelling.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    entry = repos[name]
+    path_str = entry.get("path") if isinstance(entry, dict) else None
+    if not path_str:
+        print(
+            f"ERROR: repo '{name}' has no path in repos.yaml.\n"
+            f"Fix: edit repos.yaml and set `repos.{name}.path: <abs-path>`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    repo_path = Path(path_str).expanduser().resolve()
+    if not repo_path.is_dir():
+        print(
+            f"ERROR: repo '{name}' path {repo_path} does not exist or is not a directory.\n"
+            f"Fix: check the path in repos.yaml.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return repo_path
+
+
 # ── templates ─────────────────────────────────────────────────────────────────
 
 
@@ -1964,171 +2011,6 @@ def cmd_orchestrator_qa_report(args: argparse.Namespace) -> None:
     sys.exit(_orch_invoke("qa_report.py", "orch_qa_report", argv))
 
 
-def cmd_orchestrator_start(args: argparse.Namespace) -> None:
-    """Start an orchestrator session in a dedicated tmux window.
-
-    Creates a tmux session named ``stellar-orch-<repo-basename>``, starts a
-    Claude Code session inside it, and sends the initial /deploy command so the
-    orchestrator begins automatically.
-
-    If the session already exists the command prints the attach line and exits
-    (or attaches immediately when --attach is given).
-    """
-    import shutil as _shutil
-    import time as _time
-
-    target_repo = os.path.realpath(args.target_repo)
-    repo_name = os.path.basename(target_repo)
-    team = getattr(args, "team", None) or "epic-task"
-    session_name = f"stellar-orch-{repo_name}"
-    attach = getattr(args, "attach", False)
-
-    # 1. Require tmux
-    if _shutil.which("tmux") is None:
-        print(
-            "ERROR: tmux is not installed.\n"
-            "  macOS:  brew install tmux\n"
-            "  Ubuntu: sudo apt install tmux",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # 2. Require claude CLI
-    if _shutil.which("claude") is None:
-        print(
-            "ERROR: claude CLI not found in PATH.\n"
-            "  Install: https://claude.ai/claude-code",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # 3. If session already exists — attach or report
-    existing = subprocess.run(
-        ["tmux", "has-session", "-t", session_name],
-        capture_output=True,
-    )
-    if existing.returncode == 0:
-        print(f"Orchestrator session '{session_name}' already running.")
-        print(f"  Attach:  tmux attach -t {session_name}")
-        if attach:
-            os.execvp("tmux", ["tmux", "attach", "-t", session_name])
-        return
-
-    # 4. Create new detached tmux session rooted in the target repo
-    subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session_name, "-c", target_repo],
-        check=True,
-    )
-
-    # 5. Start Claude Code inside the session
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, "claude", "Enter"],
-        check=True,
-    )
-
-    # 6. Wait for Claude to initialise, then send the orchestrator entry command.
-    #    The /deploy command triggers the full session-init flow defined in
-    #    agents/orchestrator/AGENT.md: tech plan load → pick → implement.
-    _time.sleep(3)
-    initial_cmd = f"/deploy --team {team}"
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, initial_cmd, "Enter"],
-        check=True,
-    )
-
-    print(f"Orchestrator session started.")
-    print(f"  Session: {session_name}")
-    print(f"  Team:    {team}")
-    print(f"  Repo:    {target_repo}")
-    print(f"  Attach:  tmux attach -t {session_name}")
-    print(f"  Kill:    tmux kill-session -t {session_name}")
-
-    if attach:
-        os.execvp("tmux", ["tmux", "attach", "-t", session_name])
-
-
-def _orch_pick_ids(team: str, target_repo: str, limit: int) -> list[str]:
-    """Run pick_ready.py as a subprocess and return the issue IDs.
-
-    Subprocess (not in-process) so we get a clean JSON capture on stdout —
-    pick_ready writes a JSON array and we need to parse it after each
-    call without interfering with other module-level state.
-    """
-    script = _orch_script("pick_ready.py")
-    if not script.exists():
-        print(f"ERROR: {script} not found", file=sys.stderr)
-        return []
-    r = subprocess.run(
-        [sys.executable, str(script),
-         "--team", team, "--target-repo", target_repo,
-         "--limit", str(limit)],
-        capture_output=True, text=True,
-    )
-    if r.returncode != 0:
-        print(f"pick_ready({team}) failed: {r.stderr.strip()}", file=sys.stderr)
-        return []
-    try:
-        items = json.loads(r.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    return [it.get("id", "") for it in items if it.get("id")]
-
-
-def _orch_route(issue_id: str, target_repo: str) -> tuple[int, dict]:
-    """Run route.py as a subprocess; return (exit_code, route_info_dict).
-
-    Subprocess so we can capture the JSON output without consuming sys.exit
-    inside the loop.
-    """
-    route_script = _orch_script("route.py")
-    if not route_script.exists():
-        print(f"ERROR: {route_script} not found", file=sys.stderr)
-        return 1, {}
-    r = subprocess.run(
-        [sys.executable, str(route_script),
-         issue_id, "--target-repo", target_repo],
-        capture_output=True, text=True,
-    )
-    print(r.stdout, end="")
-    if r.stderr:
-        print(r.stderr, end="", file=sys.stderr)
-    if r.returncode != 0:
-        return r.returncode, {}
-    try:
-        return 0, json.loads(r.stdout.strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError):
-        print("ERROR: could not parse route.py output", file=sys.stderr)
-        return 2, {}
-
-
-def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
-    """Fire Phase 0 for resolved team. Returns dispatch exit code.
-
-    Uses subprocess (not _orch_invoke) so a single-issue dispatch does
-    not call sys.exit and prematurely terminate the --all loop.
-    """
-    if team == "fix-bug":
-        script_name = "fix_bug_claim.py"
-    elif team == "qa":
-        script_name = "qa_load.py"
-    elif team == "task-generator":
-        script_name = "task_gen_expand.py"
-    elif team == "epic-task":
-        script_name = "epic_task_claim.py"
-    else:
-        print(f"ERROR: unknown team '{team}'", file=sys.stderr)
-        return 1
-
-    script = _orch_script(script_name)
-    if not script.exists():
-        print(f"ERROR: {script} not found", file=sys.stderr)
-        return 1
-    r = subprocess.run(
-        [sys.executable, str(script), issue_id, "--target-repo", target_repo],
-    )
-    return r.returncode
-
-
 def cmd_orchestrator_pr_watch(args: argparse.Namespace) -> None:
     """Standalone PR-lifecycle tick (D6 — replaces pr_merge_watcher.sh).
 
@@ -2165,160 +2047,130 @@ def cmd_orchestrator_run(args: argparse.Namespace) -> None:
 
 
 def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
-    """Composite: route (or pick) → Phase 0 entry for the resolved team.
+    """Open a dedicated tmux + Claude Code session and send /deploy to it.
 
-    Three modes:
-    - With <id>: route the issue, then fire the team's Phase 0 step.
-    - Without <id>, no --all: pick next ready item for --team (or scan
-      all teams), then route + dispatch a single issue.
-    - With --all --team T: loop over every ready issue for team T
-      (capped by --limit, default 100), routing + dispatching each.
-      Default behaviour is continue-on-error; pass --stop-on-error
-      to bail on the first failure.
+    `se o deploy` ALWAYS launches a tmux session — there is no CLI batch
+    mode. The actual pick/route/dispatch happens inside Claude Code, which
+    follows agents/orchestrator/AGENT.md (tech plan load → pick → claim →
+    implement → ship).
 
-    Multi-phase pipelines (fix-bug, QA) only get Phase 0 here. Operator
-    drives subsequent phases (verify, pr, report) manually with
-    `se o fix-bug verify|pr` / `se o qa report`.
+    Session lifecycle:
+      - Session name: stellar-deploy-<repo-name>
+      - If session does NOT exist: create it rooted in the target repo,
+        start `claude` inside it, then send the /deploy command.
+      - If session DOES exist: send-keys the new /deploy command into it.
+        Useful for queueing additional work into a running orchestrator.
+      - --attach: exec `tmux attach` after creation/queueing.
+
+    The /deploy command is composed from the operator's args:
+      <id>        → /deploy <id>
+      --team T    → /deploy --team T
+      --all       → /deploy --all
+      --dry-run   → /deploy --dry-run
+    Flags compose: `--repo X --team T --all --dry-run` → `/deploy --team T
+    --all --dry-run`.
     """
+    import shutil as _shutil
+    import time as _time
+
     _apply_plane_profile_env(args)
-    target_repo = args.target_repo
 
-    # ── Mode 3: --all batch loop ─────────────────────────────────────────
-    if args.all:
-        if args.id:
-            print("ERROR: --all cannot be combined with <id>", file=sys.stderr)
-            sys.exit(2)
-        if not args.team:
-            print("ERROR: --all requires --team T", file=sys.stderr)
-            sys.exit(2)
+    # 1. Resolve the registered repo NAME → absolute path via repos.yaml.
+    base = Path(args.dir).resolve()
+    target_repo = str(_resolve_named_repo(args.repo, base))
 
-        team = args.team
+    # 2. Validate operator argument combinations early.
+    if args.all and args.id:
+        print("ERROR: --all cannot be combined with <id>", file=sys.stderr)
+        sys.exit(2)
+    if args.all and not args.team:
+        print("ERROR: --all requires --team T", file=sys.stderr)
+        sys.exit(2)
 
-        # Guard: only batch-valid teams (agent-teams with a Phase 0 script,
-        # plus hint-only teams that loop and print /ship hints) are allowed.
-        # Anything outside _BATCH_TEAMS is rejected with exit 0.
-        if team not in _BATCH_TEAMS:
-            print(
-                f"Team '{team}' is not a valid batch target — no Phase 0 "
-                f"dispatch available from `se` "
-                f"(valid teams: {', '.join(_BATCH_TEAMS)}).\nNothing to do.",
-                file=sys.stderr,
-            )
-            sys.exit(0)
-
-        limit = args.limit or 100
-        ids = _orch_pick_ids(team, target_repo, limit)
-
-        # Empty-queue report — distinct from per-issue summary so the
-        # operator gets a clear "nothing to dispatch" signal.
-        if not ids:
-            print(f"── Empty queue report (team={team}) ──")
-            print(f"  repo:   {target_repo}")
-            print(f"  ready:  0 issues")
-            print(f"  hint:   inspect in-flight items with "
-                  f"`grava ready --json` and `grava list` in the repo, "
-                  f"or `python3 agents/orchestrator/cli/pick_ready.py "
-                  f"--team {team}` for the raw ready list.")
-            print(f"  note:   nothing dispatched; no Phase 0 fired.")
-            sys.exit(0)
-
-        print(f"Batch dispatch: team={team}, {len(ids)} issue(s) ready "
-              f"(limit={limit}).")
-        if args.dry_run:
-            for iid in ids:
-                print(f"  [dry-run] would dispatch {iid} to team={team} Phase 0")
-            sys.exit(0)
-
-        dispatched: list[str] = []
-        blocked: list[str] = []          # exit 3 from claim — skip, NOT a failure
-        failed: list[tuple[str, int]] = []
-
-        for idx, iid in enumerate(ids, start=1):
-            print(f"\n[{idx}/{len(ids)}] {iid}")
-            rc, route_info = _orch_route(iid, target_repo)
-            if rc != 0:
-                failed.append((iid, rc))
-                if args.stop_on_error:
-                    break
-                continue
-
-            routed_team = route_info.get("team", "")
-            # Silent skip: if the picked issue doesn't actually belong to
-            # the requested team (rare — labels changed since pick_ready
-            # ran), do nothing. No log row, no count.
-            if routed_team != team:
-                continue
-
-            print(f"→ Dispatching {iid} to team={team} (Phase 0)")
-            rc = _orch_dispatch_phase0(iid, team, target_repo)
-            if rc == 0:
-                dispatched.append(iid)
-            elif rc == 3:
-                # Hard-reject for unresolved blockers — NOT a failure.
-                # The loop continues; --stop-on-error does NOT trigger.
-                print(f"  skipped {iid} (exit=3, blocked by deps)")
-                blocked.append(iid)
-            else:
-                failed.append((iid, rc))
-                if args.stop_on_error:
-                    break
-
-        # Batch summary
-        print(f"\n── Batch summary (team={team}) ──")
-        print(f"  dispatched: {len(dispatched)}  "
-              f"blocked: {len(blocked)}  "
-              f"failed: {len(failed)}  "
-              f"of {len(ids)} candidates")
-        for iid, rc in failed:
-            print(f"  failed {iid}: exit={rc}")
-        if blocked:
-            print(f"  hint: inspect blockers with "
-                  f"`grava blocked <id> --json` in the repo.")
-        if not dispatched and not blocked and not failed:
-            # All candidates silently skipped (route mismatch).
-            print(f"  note:       none of the {len(ids)} candidates routed to "
-                  f"team={team}; nothing dispatched.")
-        # Exit 0 if only failures are absent. Blocked is normal and expected.
-        sys.exit(0 if not failed else 1)
-
-    # ── Mode 1 / 2: single-issue dispatch ────────────────────────────────
-    issue_id = args.id
-    if not issue_id:
-        # Auto-pick from one team or scan all four teams (priority order)
-        teams = [args.team] if args.team else [
-            "fix-bug", "epic-task", "qa", "task-generator",
-        ]
-        for team in teams:
-            picked = _orch_pick_ids(team, target_repo, 1)
-            if picked:
-                issue_id = picked[0]
-                print(f"Auto-picked from team={team}: {issue_id}")
-                break
-        if not issue_id:
-            print(
-                f"No ready issues found for "
-                f"{'team='+args.team if args.team else 'any team'} in {target_repo}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    rc, route_info = _orch_route(issue_id, target_repo)
-    if rc != 0:
-        sys.exit(rc)
-
-    team = route_info.get("team", "")
-    if args.team and args.team != team:
+    # 3. Require tmux + claude on PATH — there's no CLI fallback.
+    if _shutil.which("tmux") is None:
         print(
-            f"WARNING: --team={args.team} but routing classified {issue_id} as "
-            f"{team}. Using {team}.",
+            "ERROR: tmux is not installed.\n"
+            "  macOS:  brew install tmux\n"
+            "  Ubuntu: sudo apt install tmux",
             file=sys.stderr,
         )
-    if args.dry_run:
-        print(f"[dry-run] Would dispatch {issue_id} to team={team} Phase 0.")
-        sys.exit(0)
+        sys.exit(1)
+    if _shutil.which("claude") is None:
+        print(
+            "ERROR: claude CLI not found in PATH.\n"
+            "  Install: https://claude.ai/claude-code",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    print(f"\n→ Dispatching {issue_id} to team={team} (Phase 0)")
-    sys.exit(_orch_dispatch_phase0(issue_id, team, target_repo))
+    # 4. Compose the /deploy command sent into the Claude session.
+    slash_parts = ["/deploy"]
+    if args.id:
+        slash_parts.append(args.id)
+    if args.team:
+        slash_parts += ["--team", args.team]
+    if args.all:
+        slash_parts.append("--all")
+    if args.limit:
+        slash_parts += ["--limit", str(args.limit)]
+    if args.dry_run:
+        slash_parts.append("--dry-run")
+    if getattr(args, "stop_on_error", False):
+        slash_parts.append("--stop-on-error")
+    slash_cmd = " ".join(slash_parts)
+
+    session_name = f"stellar-deploy-{args.repo}"
+    attach = getattr(args, "attach", False)
+
+    # 5. Check if the session already exists.
+    existing = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+    )
+    session_exists = existing.returncode == 0
+
+    if session_exists:
+        # Send the new /deploy into the running session — queues more work
+        # without restarting Claude (preserves context, in-flight state).
+        print(f"Session '{session_name}' already running — queueing new command.")
+        print(f"  Repo:    {args.repo} → {target_repo}")
+        print(f"  Sending: {slash_cmd}")
+        subprocess.run(
+            ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
+            check=True,
+        )
+        print(f"  Attach:  tmux attach -t {session_name}")
+        if attach:
+            os.execvp("tmux", ["tmux", "attach", "-t", session_name])
+        return
+
+    # 6. New session: create detached, start claude, wait, send command.
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, "-c", target_repo],
+        check=True,
+    )
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session_name, "claude", "Enter"],
+        check=True,
+    )
+    # Sleep matches `se o start`'s heuristic — 3s gives Claude time to
+    # initialise before its stdin is fed the first command.
+    _time.sleep(3)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
+        check=True,
+    )
+
+    print("Deploy session started.")
+    print(f"  Session: {session_name}")
+    print(f"  Repo:    {args.repo} → {target_repo}")
+    print(f"  Command: {slash_cmd}")
+    print(f"  Attach:  tmux attach -t {session_name}")
+    print(f"  Kill:    tmux kill-session -t {session_name}")
+
+    if attach:
+        os.execvp("tmux", ["tmux", "attach", "-t", session_name])
 
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
@@ -2622,7 +2474,15 @@ def main() -> None:
         help="Filter for auto-pick / required for --all. "
              "Ignored when <id> is given (route decides).",
     )
-    p_orch_dep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_dep.add_argument(
+        "--repo", required=True, metavar="NAME",
+        help="Repo NAME from repos.yaml (run `se repos` to list). "
+             "Required — deploy refuses to run against unregistered repos.",
+    )
+    p_orch_dep.add_argument(
+        "--dir", default=".", metavar="PATH",
+        help="Stellar-engine workspace dir containing repos.yaml (default: cwd).",
+    )
     p_orch_dep.add_argument("--dry-run", action="store_true",
                             help="Route only — do not fire Phase 0")
     p_orch_dep.add_argument("--all", action="store_true",
@@ -2635,24 +2495,14 @@ def main() -> None:
     p_orch_dep.add_argument("--stop-on-error", action="store_true",
                             help="With --all: bail at the first per-issue "
                                  "failure instead of continuing.")
+    p_orch_dep.add_argument(
+        "--attach", action="store_true",
+        help="Attach to the tmux session immediately after launching it.",
+    )
     _add_plane_profile_flags(p_orch_dep)
 
-    # se orchestrator start — open a tmux session running claude
-    p_orch_start = orch_sub.add_parser(
-        "start",
-        help="Open a dedicated tmux session and start Claude Code as the orchestrator",
-    )
-    p_orch_start.add_argument("--target-repo", default=".", metavar="PATH",
-                              help="Target repository path (default: cwd)")
-    p_orch_start.add_argument(
-        "--team", default="epic-task",
-        choices=("fix-bug", "epic-task", "qa", "task-generator"),
-        help="Team to wake on session start (default: epic-task)",
-    )
-    p_orch_start.add_argument(
-        "--attach", action="store_true",
-        help="Attach to the tmux session immediately after creating it",
-    )
+    # NOTE: `se o start` removed — superseded by `se o deploy --repo NAME`,
+    # which always opens a tmux+claude session (same behaviour as start did).
 
     # se orchestrator run — long-running fleet daemon (D0 scaffold).
     # See docs/orchestrator/daemon-plan.md. Currently a stub: every call
@@ -2775,7 +2625,6 @@ def main() -> None:
             "doctor": cmd_orchestrator_doctor,
             # NOTE: `expand` removed — use `deploy <epic-id>` instead.
             "deploy": cmd_orchestrator_deploy,
-            "start":  cmd_orchestrator_start,
             "run":    cmd_orchestrator_run,
             "pr-watch": cmd_orchestrator_pr_watch,
         }

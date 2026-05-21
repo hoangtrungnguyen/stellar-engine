@@ -54,15 +54,11 @@ se o doctor                              # env + repo + cron checks
 #  or `grava ready --json` to list ready issues — the `se o pick` shortcut
 #  was removed; deploy's --all batch loop still uses pick_ready internally.)
 
-# Composite "start orchestrator" entry — auto-picks if <id> omitted.
-# To dispatch a known epic into the task-generator pipeline use this
-# (it replaces the old `se o expand <epic-id>` shortcut, which has been
-# removed; deploy routes the epic to the task-generator team and
-# invokes the same `task_gen_expand.py` script underneath).
-se o deploy  [<id>]     [--team T] [--dry-run]
-
-# Batch loop: fire Phase 0 for EVERY ready issue on a team in this repo
-se o deploy --all --team T [--limit N] [--dry-run] [--stop-on-error]
+# Composite "start orchestrator" entry. ALWAYS opens a tmux + Claude
+# Code session. `--repo NAME` is REQUIRED — deploy refuses to operate on
+# a repo that isn't registered in repos.yaml. List registered repos with
+# `se repos`. (`--dir PATH` overrides the stellar-engine workspace if not cwd.)
+se o deploy --repo NAME [<id>] [--team T] [--all] [--limit N] [--dry-run] [--attach]
 
 # Fix-bug pipeline phases
 se o fix-bug claim  <id>                 # Phase 0
@@ -74,69 +70,35 @@ se o qa load   <id> [--checklist P|--type T]   # Phase 0
 se o qa report <id> --results-file P           # Phase 2
 ```
 
-`deploy` routes the issue, then fires the team's Phase 0
-(`fix_bug_claim`, `qa_load`, `task_gen_expand`, or `epic_task_claim`).
-Multi-phase pipelines still need agent action between phases (the
-`Fix` / `Review` / `Implement` steps happen in Claude Code; only Phase 0
-/ 2 / 3 are CLI-driven).
+`deploy` always launches a tmux session named `stellar-deploy-<repo-name>`
+with Claude Code inside it, then sends a `/deploy ...` slash command
+composed from the operator's flags. The actual pick / route / claim
+loop happens inside Claude — this AGENT.md governs that behaviour.
 
-**Batch mode (`--all`).** When the operator wants Phase 0 fired for every
-ready issue on a team in a single repo (not just the next one), add
-`--all --team T`. The deploy command loops over `pick_ready`'s output
-(capped at `--limit N`, default 100) and dispatches each.
+**Session lifecycle:**
+- New session: `tmux new-session -d -s stellar-deploy-<name> -c <repo-path>`
+  → start `claude` → wait → send `/deploy ...`.
+- Existing session: `tmux send-keys` the new `/deploy ...` into the
+  running session. Lets the operator queue more work without restarting
+  Claude (preserves context, in-flight worktrees, wisp state).
+- `--attach`: exec `tmux attach -t stellar-deploy-<name>` immediately
+  after creating / queueing.
 
-Two guardrails:
+**Flag composition.** Deploy translates its CLI flags into a slash
+command sent to Claude:
+- `<id>` → `/deploy <id>`
+- `--team T` → `/deploy --team T`
+- `--all` → `/deploy --all`
+- `--limit N` → `/deploy --limit N`
+- `--dry-run` → `/deploy --dry-run`
+- `--stop-on-error` → `/deploy --stop-on-error`
 
-1. **Batch-team gate.** All four teams are valid for `--all` — each has a
-   Phase 0 dispatch script:
-   - `fix-bug`       → `fix_bug_claim.py`
-   - `qa`            → `qa_load.py`
-   - `task-generator` → `task_gen_expand.py`
-   - `epic-task`     → `epic_task_claim.py`
+**Required dependencies.** `tmux` and `claude` must be on PATH. Deploy
+exits 1 with installation hints if either is missing.
 
-   Any team value outside this set is rejected with a "not a valid batch
-   target — nothing to do" message and exit 0. The constants `_AGENT_TEAMS`
-   and `_BATCH_TEAMS` in `cli/se` are the single source of truth.
-
-2. **Silent skip on team mismatch.** Per-issue, if a picked candidate's
-   route resolves to a different team than `--team T` (rare — would
-   happen if labels changed between `pick_ready` and `route`), the
-   issue is silently skipped: no dispatch fires, no log row, no count
-   bump. "If the issues do not belong to a batch team, do nothing."
-
-**Empty-queue report.** When `pick_ready` returns zero ready issues for
-a valid batch-team, `--all` emits a structured notification report —
-repo path, ready-issue count (0), and a hint about how to inspect in-flight
-items (`grava ready --json`, `grava list`, or the underlying
-`agents/orchestrator/cli/pick_ready.py` script). The note reads
-"nothing dispatched; no Phase 0 fired." Exit code stays 0.
-
-**Batch summary**:
-
-```
-── Batch summary (team=fix-bug) ──
-  dispatched: 3  failed: 0  of 3 candidates
-
-── Batch summary (team=epic-task) ──
-  dispatched: 2  failed: 0  of 2 candidates
-```
-
-Default behaviour is continue-on-error: a per-issue failure logs a
-`failed <id>: exit=N` row in the summary but the loop keeps going. Pass
-`--stop-on-error` to bail at the first failure. Exit code is non-zero if
-any issue failed.
-
-`--all` requires `--team T` and is incompatible with an explicit `<id>`.
-Combine with `--dry-run` to preview the dispatch list without firing any
-Phase 0 steps. This is a one-tick batch — it does not respect the daemon
-plan's `max_concurrent` cap (that lives in `se o run`, not yet built).
-
-Single-issue mode (`se o deploy <id>` and `se o deploy --team T` without
-`--all`) fires Phase 0 for one issue and exits — the agent then continues
-the pipeline (implement → ship).
-
-A continuous-loop daemon (`se o run --repo <path>` polling
-the backlog) is planned — see `docs/orchestrator/daemon-plan.md`.
+A continuous-loop daemon (`se o run`) is the alternative for unattended
+fleet runs — see `docs/orchestrator/daemon-plan.md`. Deploy is interactive
+and operator-driven; `run` is unattended.
 
 **Plane credentials.** Every subcommand that talks to Plane (`doctor`,
 `deploy` when routing to `task-generator`) accepts

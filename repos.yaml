@@ -8,3 +8,8 @@ repos:
     max_concurrent: 2
     priority_threshold: medium
     poll_interval: 60
+  grava-sandbox-2:
+    path: /Users/trungnguyenhoang/IdeaProjects/grava-sandbox-2
+    max_concurrent: 2
+    priority_threshold: medium
+    poll_interval: 60
