@@ -51,9 +51,12 @@ forms accept identical arguments. Examples below use the shorthand.
 se o route   <id>                        # classify team via grava type/labels
 se o pick    --team T   [--limit N]      # next ready issue for team T
 se o doctor                              # env + repo + cron checks
-se o expand  <epic-id>  [--dry-run]      # epic → task-generator delegate
 
-# Composite "start orchestrator" entry — auto-picks if <id> omitted
+# Composite "start orchestrator" entry — auto-picks if <id> omitted.
+# To dispatch a known epic into the task-generator pipeline use this
+# (it replaces the old `se o expand <epic-id>` shortcut, which has been
+# removed; deploy routes the epic to the task-generator team and
+# invokes the same `task_gen_expand.py` script underneath).
 se o deploy  [<id>]     [--team T] [--dry-run]
 
 # Batch loop: fire Phase 0 for EVERY ready issue on a team in this repo
