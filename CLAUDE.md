@@ -107,14 +107,13 @@ python3 upload_wiki_page.py docs/notes.md
 - **`systems/<Name>/system.yaml`** — per-system override (preferred). Wins on conflict with the root file. Also holds the `plane_state_map` for `grava_plane_sync.py`.
 - See [`systems/SportBuddies/`](systems/SportBuddies) for a complete system spec template.
 
-## PR merge watcher (cron)
+## PR merge watcher (built into the daemon)
 
-`agents/orchestrator/scripts/pr_merge_watcher.sh` polls grava issues labeled `pr-created`. Handles MERGED (close + signal), CLOSED (label `pr-rejected`, re-entry hint), OPEN (stale cap at 72h, new-comment detection). Install as cron in the target repo:
+PR lifecycle handling (MERGED → close + signal, CLOSED → label `pr-rejected` + re-entry hint, OPEN → stale cap at 72h + new-comment detection) lives inside `se orchestrator run`'s 300s pr-lifecycle ticker (Phase D6 — see [`docs/orchestrator/daemon-plan.md`](docs/orchestrator/daemon-plan.md)).
 
-```bash
-*/5 * * * * cd /path/to/target-repo && \
-    bash /path/to/stellar-engine/agents/orchestrator/scripts/pr_merge_watcher.sh
-```
+The legacy `agents/orchestrator/scripts/pr_merge_watcher.sh` cron entry is **deleted** as of D6. If you still have a crontab line referencing it, `se doctor` reports an error — `crontab -e` and remove the line. The Python port (`agents/orchestrator/runtime/pr_watcher.py`) is centralized on a new `pr_state` wisp schema and re-uses the daemon's signal handling + state file.
+
+To run it manually outside the daemon (parity testing, ad-hoc): `se orchestrator pr-watch --once [--repo PATH]`.
 
 ## MCP wiring
 

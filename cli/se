@@ -1262,15 +1262,28 @@ def _check_repo(name: str, cfg: dict, base: Path) -> list[Check]:
 
 
 def _check_cron() -> Check:
+    """Detect legacy cron entries for the now-deleted pr_merge_watcher.sh.
+
+    Phase D6 folded the watcher into `se orchestrator run`'s 300s
+    pr-lifecycle ticker, and the bash script no longer exists. Any
+    crontab line still referencing it will fail every 5 minutes —
+    flag it loudly so the operator removes the line.
+    """
     try:
         r = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=5)
         if "pr_merge_watcher" in r.stdout:
-            return Check("cron: pr_merge_watcher", "ok", "installed")
+            return Check(
+                "cron: legacy pr_merge_watcher", "error",
+                "crontab still references the deleted "
+                "pr_merge_watcher.sh — `crontab -e` and remove the "
+                "line; the daemon (`se orchestrator run`) handles "
+                "PR lifecycle now",
+            )
     except Exception:
-        return Check("cron: pr_merge_watcher", "warn", "cannot read crontab")
+        return Check("cron", "warn", "cannot read crontab")
     return Check(
-        "cron: pr_merge_watcher", "warn",
-        "not installed — see CLAUDE.md §PR merge watcher for cron snippet",
+        "cron: legacy pr_merge_watcher", "ok",
+        "no stale cron entry detected",
     )
 
 
@@ -2137,14 +2150,27 @@ def _orch_dispatch_phase0(issue_id: str, team: str, target_repo: str) -> int:
     return r.returncode
 
 
-def cmd_orchestrator_run(args: argparse.Namespace) -> None:
-    """Long-running fleet daemon (D0 scaffold).
+def cmd_orchestrator_pr_watch(args: argparse.Namespace) -> None:
+    """Standalone PR-lifecycle tick (D6 — replaces pr_merge_watcher.sh).
 
-    Wraps `agents/orchestrator/cli/daemon.py`. The daemon will own the
-    tick loop, in-flight tracking, and (from Phase D6) the folded-in
-    PR-merge watcher — see `docs/orchestrator/daemon-plan.md`. Today
-    every invocation prints a stub message and exits 0; the flags are
-    plumbed so the surface won't change as D1–D6 land.
+    Wraps `agents/orchestrator/cli/pr_watch.py`. The same logic runs
+    inside `se orchestrator run`'s 300s pr-lifecycle ticker; this CLI
+    surface exists for ad-hoc invocations + parity testing.
+    """
+    argv: list[str] = []
+    if args.once:
+        argv.append("--once")
+    if args.repo:
+        argv += ["--repo", args.repo]
+    if args.repos:
+        argv += ["--repos", args.repos]
+    argv += ["--log-level", args.log_level]
+    sys.exit(_orch_invoke("pr_watch.py", "orch_pr_watch", argv))
+
+
+def cmd_orchestrator_run(args: argparse.Namespace) -> None:
+    """Long-running fleet daemon. D0 scaffold (#40) + D1 tick loop (#41)
+    + D6 pr-lifecycle ticker (this PR) — see docs/orchestrator/daemon-plan.md.
     """
     argv: list[str] = []
     if args.once:
@@ -2672,6 +2698,26 @@ def main() -> None:
                             choices=("DEBUG", "INFO", "WARNING", "ERROR"),
                             help="Log level (default: INFO).")
 
+    # se orchestrator pr-watch — one-shot PR-lifecycle pass
+    # (D6 — replaces agents/orchestrator/scripts/pr_merge_watcher.sh).
+    # Same logic runs inside `se orchestrator run` on the 300s ticker;
+    # this CLI exists for ad-hoc runs + parity testing.
+    p_orch_prw = orch_sub.add_parser(
+        "pr-watch",
+        help="One-shot PR-lifecycle tick (replaces pr_merge_watcher.sh)",
+    )
+    p_orch_prw.add_argument("--once", action="store_true",
+                            help="Required today; future continuous mode "
+                                 "uses `se orchestrator run`.")
+    p_orch_prw.add_argument("--repo", default=None, metavar="PATH",
+                            help="Scan exactly this repo (bypasses repos.yaml).")
+    p_orch_prw.add_argument("--repos", default=None, metavar="PATH",
+                            help="Path to repos.yaml. Defaults to <cwd>/repos.yaml.")
+    p_orch_prw.add_argument("--log-level", default="INFO",
+                            dest="log_level",
+                            choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+                            help="Log level (default: INFO).")
+
     # se orchestrator epic-task {claim}
     p_orch_et = orch_sub.add_parser("epic-task", help="Epic-task pipeline phases")
     et_sub = p_orch_et.add_subparsers(dest="et_cmd", metavar="PHASE")
@@ -2747,6 +2793,7 @@ def main() -> None:
             "deploy": cmd_orchestrator_deploy,
             "start":  cmd_orchestrator_start,
             "run":    cmd_orchestrator_run,
+            "pr-watch": cmd_orchestrator_pr_watch,
         }
         if args.orch_cmd in orch_table:
             orch_table[args.orch_cmd](args)
