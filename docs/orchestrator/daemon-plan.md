@@ -2,14 +2,21 @@
 
 ## Status
 
-🟨 **D0 scaffolded** (2026-05-21). `agents/orchestrator/cli/daemon.py`
-exists as a stub; `se orchestrator run` is wired through but every
-invocation prints a one-line message and exits 0. Phases D1–D6 still
-to do.
+🟩 **D1 tick loop landed** (2026-05-21). `se orchestrator run` now:
+- Loads `repos.yaml`, polls every entry on the min `poll_interval`
+  cadence across the fleet (default 60s).
+- Per repo: skips on `.grava/orchestrator-paused`, otherwise scans
+  in-flight pipelines and dispatches Phase 0 for each team where
+  `in_flight < max_concurrent` and `pick_ready` returns a candidate.
+- `--once` runs a single tick then exits.
+- Honours `SIGINT` and `SIGTERM`: finishes the current tick, writes
+  the state file, exits 0.
+- Atomic-writes daemon state to
+  `~/.local/share/stellar-engine/daemon.json` after each tick.
 
-The one-shot CLI wrappers shipped today (`se orchestrator deploy`,
-`route`, `pick`, `fix-bug *`, `qa *`, `expand`, `doctor`) are stateless
-single-fire calls — an operator (or cron job) drives them manually.
+D2–D6 still to do. The one-shot CLI wrappers shipped today
+(`se orchestrator deploy`, `route`, `pick`, `fix-bug *`, `qa *`,
+`expand`, `doctor`) remain available for operator-driven workflows.
 
 The daemon replaces "operator-as-loop" with a long-running process that
 polls the grava backlog, dispatches ready issues to teams, and respects
@@ -189,7 +196,9 @@ Reads from grava wisps + daemon state file. Does not mutate.
 
 **New**:
 - `agents/orchestrator/cli/daemon.py` — tick loop, signal handling.
-  ✅ D0 scaffold landed (stub `main(argv)` only; flags plumbed forward).
+  ✅ D0 scaffold + ✅ D1 tick loop landed. Self-contained (no
+  `runtime.py` extraction yet — moves out when D2 needs to share
+  helpers).
 - `agents/orchestrator/cli/status.py` — read-only status renderer.
 - `agents/orchestrator/runtime.py` — shared helpers (in-flight counting,
   state-file I/O, policy loading).
