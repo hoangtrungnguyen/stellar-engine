@@ -120,9 +120,9 @@ se taskgen <project-uuid> <page-uuid> --yes --plane-profile stellar-sandbox
 # `se o` is shorthand for `se orchestrator` — both forms work identically.
 se o doctor --target-repo <repo>              # verify env for sub-pipelines
 se o route <issue-id> --target-repo <repo>             # classify team
-se o deploy [<id>] [--team T] --target-repo <repo>     # start Phase 0 (single issue or auto-pick)
-se o deploy --all --team T --target-repo <repo>        # batch: Phase 0 for every ready issue
-se o deploy <epic-id> --target-repo <repo>             # epic → routes to task-generator
+se o deploy --repo <name> [<id>] [--team T]            # Phase 0 (single issue; --repo NAME from repos.yaml)
+se o deploy --repo <name> --all --team T               # batch: Phase 0 for every ready issue on a registered repo
+se o deploy --repo <name> <epic-id>                    # epic → routes to task-generator
 se o start [--team T] [--attach]                       # tmux + Claude Code launcher
 # Listing ready issues (no longer a top-level `se o pick`):
 python3 agents/orchestrator/cli/pick_ready.py --team fix-bug --target-repo <repo>

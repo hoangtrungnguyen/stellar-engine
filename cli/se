@@ -171,6 +171,53 @@ def _load_repos(base: Path) -> dict[str, dict]:
     return data.get("repos") or {}
 
 
+def _resolve_named_repo(name: str, base: Path) -> Path:
+    """Resolve a repo NAME → absolute path via repos.yaml.
+
+    Raises SystemExit(2) with a helpful message if the name is not registered
+    or repos.yaml is missing. Used by `se o deploy --repo NAME` (and any
+    other operator command that should refuse to operate on unregistered
+    repos — name-based addressing prevents typos and stops the operator
+    from deploying to the wrong directory).
+    """
+    repos = _load_repos(base)
+    if not repos:
+        print(
+            f"ERROR: no repos registered. repos.yaml not found at {base}/repos.yaml "
+            f"or empty.\n"
+            f"Fix: `se init --dir {base}` then `se repos add <name> --path <abs-path>`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if name not in repos:
+        registered = ", ".join(sorted(repos.keys())) or "(none)"
+        print(
+            f"ERROR: repo '{name}' not registered in repos.yaml.\n"
+            f"Registered repos: {registered}\n"
+            f"Fix: `se repos add {name} --path <abs-path>` or check spelling.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    entry = repos[name]
+    path_str = entry.get("path") if isinstance(entry, dict) else None
+    if not path_str:
+        print(
+            f"ERROR: repo '{name}' has no path in repos.yaml.\n"
+            f"Fix: edit repos.yaml and set `repos.{name}.path: <abs-path>`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    repo_path = Path(path_str).expanduser().resolve()
+    if not repo_path.is_dir():
+        print(
+            f"ERROR: repo '{name}' path {repo_path} does not exist or is not a directory.\n"
+            f"Fix: check the path in repos.yaml.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return repo_path
+
+
 # ── templates ─────────────────────────────────────────────────────────────────
 
 
@@ -2181,7 +2228,13 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     `se o fix-bug verify|pr` / `se o qa report`.
     """
     _apply_plane_profile_env(args)
-    target_repo = args.target_repo
+
+    # Resolve the registered repo NAME → absolute path via repos.yaml.
+    # Deploy refuses to operate on unregistered repos — name-based addressing
+    # prevents the operator from accidentally targeting the wrong directory.
+    base = Path(args.dir).resolve()
+    target_repo = str(_resolve_named_repo(args.repo, base))
+    print(f"Deploy target: {args.repo} → {target_repo}")
 
     # ── Mode 3: --all batch loop ─────────────────────────────────────────
     if args.all:
@@ -2622,7 +2675,15 @@ def main() -> None:
         help="Filter for auto-pick / required for --all. "
              "Ignored when <id> is given (route decides).",
     )
-    p_orch_dep.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_dep.add_argument(
+        "--repo", required=True, metavar="NAME",
+        help="Repo NAME from repos.yaml (run `se repos` to list). "
+             "Required — deploy refuses to run against unregistered repos.",
+    )
+    p_orch_dep.add_argument(
+        "--dir", default=".", metavar="PATH",
+        help="Stellar-engine workspace dir containing repos.yaml (default: cwd).",
+    )
     p_orch_dep.add_argument("--dry-run", action="store_true",
                             help="Route only — do not fire Phase 0")
     p_orch_dep.add_argument("--all", action="store_true",

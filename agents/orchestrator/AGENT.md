@@ -55,14 +55,13 @@ se o doctor                              # env + repo + cron checks
 #  was removed; deploy's --all batch loop still uses pick_ready internally.)
 
 # Composite "start orchestrator" entry — auto-picks if <id> omitted.
-# To dispatch a known epic into the task-generator pipeline use this
-# (it replaces the old `se o expand <epic-id>` shortcut, which has been
-# removed; deploy routes the epic to the task-generator team and
-# invokes the same `task_gen_expand.py` script underneath).
-se o deploy  [<id>]     [--team T] [--dry-run]
+# `--repo NAME` is REQUIRED — deploy refuses to operate on a repo that
+# isn't registered in repos.yaml. List registered repos with `se repos`.
+# (`--dir PATH` overrides the stellar-engine workspace if not cwd.)
+se o deploy --repo NAME  [<id>]     [--team T] [--dry-run]
 
 # Batch loop: fire Phase 0 for EVERY ready issue on a team in this repo
-se o deploy --all --team T [--limit N] [--dry-run] [--stop-on-error]
+se o deploy --repo NAME --all --team T [--limit N] [--dry-run] [--stop-on-error]
 
 # Fix-bug pipeline phases
 se o fix-bug claim  <id>                 # Phase 0
