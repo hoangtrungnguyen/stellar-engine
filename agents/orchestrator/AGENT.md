@@ -49,8 +49,10 @@ forms accept identical arguments. Examples below use the shorthand.
 
 ```
 se o route   <id>                        # classify team via grava type/labels
-se o pick    --team T   [--limit N]      # next ready issue for team T
 se o doctor                              # env + repo + cron checks
+# (Use `python3 agents/orchestrator/cli/pick_ready.py --team T --limit N`
+#  or `grava ready --json` to list ready issues — the `se o pick` shortcut
+#  was removed; deploy's --all batch loop still uses pick_ready internally.)
 
 # Composite "start orchestrator" entry — auto-picks if <id> omitted.
 # To dispatch a known epic into the task-generator pipeline use this
@@ -105,8 +107,9 @@ Two guardrails:
 **Empty-queue report.** When `pick_ready` returns zero ready issues for
 a valid batch-team, `--all` emits a structured notification report —
 repo path, ready-issue count (0), and a hint about how to inspect in-flight
-items (`se o pick`, `grava list`). The note reads "nothing dispatched;
-no Phase 0 fired." Exit code stays 0.
+items (`grava ready --json`, `grava list`, or the underlying
+`agents/orchestrator/cli/pick_ready.py` script). The note reads
+"nothing dispatched; no Phase 0 fired." Exit code stays 0.
 
 **Batch summary**:
 
