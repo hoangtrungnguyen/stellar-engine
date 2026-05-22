@@ -60,7 +60,7 @@ Every step writes JSON intermediates into the run directory so the chain is rest
 
 ## Output format
 
-Each emitted markdown draft has YAML frontmatter and a body shaped by the rules in [docs/generator/plan.md §E1](../../docs/generator/plan.md) and consumed by [docs/task-generator/parser.md](../../docs/task-generator/parser.md):
+Each emitted markdown draft has YAML frontmatter and a body shaped by the rules in [docs/generator/plan.md §E1](../../docs/archive/generator/plan.md) and consumed by [`agents/task-generator/parser.py`](../task-generator/parser.py) (routing rules summarised in [§ Routing rules](#routing-rules) below):
 
 ```markdown
 ---
@@ -96,7 +96,10 @@ generator_model_version: n/a
 - Plain-text design note (no link)
 ```
 
-Routing rules in the downstream task-generator parser:
+### Routing rules
+
+These are the rules `agents/task-generator/parser.py` applies when consuming a rendered draft:
+
 - Bullets directly under H3 (before any H4) → `TaskNode`.
 - Bullets after `#### Acceptance Criteria` H4 → `story.acceptance_criteria`.
 - Bullets after `#### UI/UX Design` (or `Design`, `UI`, `UX`) H4 → `story.design_links`.
@@ -106,7 +109,7 @@ Both AC and UI/UX are **story-level** fields (not epic-level).
 
 ### Epic dependencies
 
-> **Full authoring guide:** [docs/generator/epic-dependencies.md](../../docs/generator/epic-dependencies.md) covers Mermaid grammar, label normalisation, real-world examples (CAPP fan-out), validation, anti-patterns, and a copy-paste template.
+> **Full authoring guide:** [docs/generator/epic-dependencies.md](../../docs/archive/generator/epic-dependencies.md) covers Mermaid grammar, label normalisation, real-world examples (CAPP fan-out), validation, anti-patterns, and a copy-paste template.
 
 The source markdown may declare cross-epic dependencies in a dedicated
 `## Epic dependencies` section, using a Mermaid `graph` / `flowchart`
@@ -156,7 +159,7 @@ undetected, so review the rendered draft before promoting.
 `--llm` will fail loudly with `LLMNotEnabled` until Phase D lands. The interim outline path is manual via a Claude Code session:
 
 1. Run `se generate <source.md> --no-llm` (or `--dry-run`) — writes `extract.json`. (Pass `--project <name>` to override the drafts namespace if the filename stem isn't what you want.)
-2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].depends_on` (folded from `extract.json` `epic_dependencies` — see [Epic dependencies](#epic-dependencies) above), `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
+2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/archive/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].depends_on` (folded from `extract.json` `epic_dependencies` — see [Epic dependencies](#epic-dependencies) above), `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
 3. Save the produced `outline.json` into `drafts/<project>/runs/<RID>/outline.json`.
 4. Re-run with `--step render` (or rerun the full chain; the orchestrator picks up the existing `outline.json`).
 
@@ -191,7 +194,7 @@ Anything else (writes outside the run directory, network calls, grava / Plane CL
 | `run.py` exit 1 — `no outline.json present and --llm not passed` | Default offline chain needs a hand-written outline | Point operator at the [Phase D interim workflow](#phase-d--interim-workflow); they paste `extract.json` into Claude Code, save outline.json into the run dir, re-run with `--step render`. |
 | `run.py` exit 1 — `Phase D … deferred` | `--llm` requested before Phase D ships | Run with `--no-llm` and use the interim workflow. |
 | `render.py` exit 1 — `outline.json not found` | Operator forgot to place outline.json | Same as above. |
-| `render.py` exit 1 — `invalid outline shape` | Hand-written outline missing required keys | Re-check against [§D2 schema](../../docs/generator/plan.md). Required: `epics[].title`, `epics[].stories[].title`, `confidence`. |
+| `render.py` exit 1 — `invalid outline shape` | Hand-written outline missing required keys | Re-check against [§D2 schema](../../docs/archive/generator/plan.md). Required: `epics[].title`, `epics[].stories[].title`, `confidence`. |
 | `render.py` exit 2 — `cannot write drafts` | Disk full / readonly | Surface the OSError; reroute via `--drafts-root`. |
 | Diff printed unexpectedly large | Source doc materially changed | Read `diff.json`; decide whether to promote anyway, edit `outline.json`, or roll back to the prior run's drafts. |
 | Drafts render but downstream Plane work items don't match the story format | task-generator's parser must be rebuilt against the new H4 routing | Confirm `agents/task-generator/parser.py` is from the same branch as the generator. The H4 rules (`Acceptance Criteria` / `UI/UX Design`) landed together in PR #12. |
@@ -199,6 +202,6 @@ Anything else (writes outside the run directory, network calls, grava / Plane CL
 
 ## See also
 
-- [docs/generator/plan.md](../../docs/generator/plan.md) — phase-by-phase implementation plan + status.
-- [docs/task-generator/parser.md](../../docs/task-generator/parser.md) — downstream parser; the generator's render output must match its hierarchy rules.
+- [docs/generator/plan.md](../../docs/archive/generator/plan.md) — phase-by-phase implementation plan + status.
+- [`agents/task-generator/parser.py`](../task-generator/parser.py) — downstream parser; the generator's render output must match its hierarchy rules. Rules summarised under [§ Routing rules](#routing-rules) above.
 - [docs/stellar-engine/plan.md](../../docs/stellar-engine/plan.md) §4 Phase F — the engine-wide entry that links here.

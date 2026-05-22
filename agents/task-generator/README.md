@@ -13,8 +13,9 @@ unchanged spec is a no-op. Orphans are flagged but never deleted.
 `type_marker` (parsed prefixes like `P0:`, `Bug:`) now propagates: `P0/P1`
 → Plane priority urgent/high; `Bug` / `Spike` → Plane labels.
 
-See `../../docs/task-generator-strategy-bullets.md` and
-`../../docs/task-generator/` for the design.
+Historical design specs (pre-Phase-2) live under
+`../../docs/archive/task-generator/`. Current behaviour is documented in
+`AGENT.md` and the code itself.
 
 ## Install
 
