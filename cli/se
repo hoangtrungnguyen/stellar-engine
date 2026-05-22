@@ -1238,6 +1238,29 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
                 for m in asset_missing:
                     print(f"           {m}")
 
+    # ── orchestrator agent + slash commands (/deploy, /generate, /qa) ─────
+    # Without this, the Claude Code session that `se o deploy` spawns inside
+    # the target repo wouldn't recognise the /deploy slash command — it lives
+    # in stellar-engine, not grava. Install into the target repo's .claude/
+    # so the operator workflow works end-to-end.
+    if args.no_claude_assets:
+        print("  skipped  orchestrator agent + slash commands (--no-claude-assets)")
+    else:
+        # Reuse the same installer as `se init`. Always overwrite — these are
+        # canonical and any operator edits should live in stellar-engine source.
+        ca_created, ca_skipped, ca_missing = _install_claude_assets(
+            repo_path, force=True,
+        )
+        for path in ca_created:
+            print(f"  installed {path}")
+        if ca_missing:
+            print(
+                "  warning  orchestrator/AGENT.md missing from bundle "
+                "(broken se install?):"
+            )
+            for m in ca_missing:
+                print(f"           {m}")
+
     # ── Plane-sync hook (.grava/hooks/plane-sync.{sh,env}) ────────────────
     # Skip when the user explicitly opts out, or when no project id is given
     # (the hook needs PLANE_PROJECT_ID to function).
@@ -2452,6 +2475,14 @@ def main() -> None:
                                   "the canonical set (always overwriting) so "
                                   "every registered repo runs the same agent "
                                   "team.")
+    p_repos_add.add_argument("--no-claude-assets", action="store_true",
+                             dest="no_claude_assets",
+                             help="Skip installing the stellar-engine "
+                                  "orchestrator agent + /deploy /generate /qa "
+                                  "slash commands into <path>/.claude/. "
+                                  "Default ON — without these, the Claude "
+                                  "session that `se o deploy` spawns inside "
+                                  "the target repo cannot recognise /deploy.")
     p_repos_add.add_argument("--dir", default=".", metavar="DIR",
                              help="Stellar-engine config dir (where repos.yaml lives)")
 
