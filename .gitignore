@@ -29,3 +29,7 @@ drafts/
 .build-venv/
 build/
 dist/
+
+# Vendored grava assets — populated at build time by
+# scripts/vendor-grava-assets.sh; never committed.
+vendored/
