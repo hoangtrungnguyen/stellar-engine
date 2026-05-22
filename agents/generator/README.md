@@ -6,8 +6,8 @@ Turn a markdown source document into reviewable spec drafts under `drafts/<proje
 
 See also:
 - [AGENT.md](AGENT.md) — agent prompt + hard limits + failure-modes table (Claude reads this when invoked as a sub-agent).
-- [../../docs/generator/plan.md](../../docs/generator/plan.md) — phase-by-phase implementation plan + status.
-- [../../docs/generator/usage.md](../../docs/generator/usage.md) — full operator walkthrough (markdown → Plane → grava).
+- [../../docs/archive/generator/plan.md](../../docs/archive/generator/plan.md) — phase-by-phase implementation plan + status (archived; all phases shipped).
+- [../../docs/archive/generator/usage.md](../../docs/archive/generator/usage.md) — archived operator walkthrough (superseded by this README).
 
 ## Quick start
 
@@ -60,7 +60,7 @@ drafts/DEMO/runs/20260516T120937Z/
 
 ## Output format
 
-Each rendered draft has YAML frontmatter and a body shaped by [docs/generator/plan.md §E1](../../docs/generator/plan.md) and consumed by [docs/task-generator/parser.md](../../docs/task-generator/parser.md):
+Each rendered draft has YAML frontmatter and a body shaped by [docs/archive/generator/plan.md §E1](../../docs/archive/generator/plan.md) and consumed by [`agents/task-generator/parser.py`](../task-generator/parser.py) (full routing rules are in [`agents/generator/AGENT.md`](AGENT.md) "Output format" / "Routing rules"):
 
 ```markdown
 ---

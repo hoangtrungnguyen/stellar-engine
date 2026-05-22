@@ -159,7 +159,7 @@ drafts/STELL/runs/20260516T120937Z/
 └── manifest.json
 ```
 
-Each draft has frontmatter with `generator_source`, `generator_run_id`, `generator_confidence`, `generator_model`, `generator_model_version`, plus the body shaped per [`docs/task-generator/parser.md`](../task-generator/parser.md) hierarchy rules.
+Each draft has frontmatter with `generator_source`, `generator_run_id`, `generator_confidence`, `generator_model`, `generator_model_version`, plus the body shaped per the hierarchy rules in [`agents/generator/AGENT.md`](../../agents/generator/AGENT.md) "Output format" / "Routing rules" (the contract that [`agents/task-generator/parser.py`](../../agents/task-generator/parser.py) consumes).
 
 Inspect one before promoting:
 ```bash
@@ -281,5 +281,5 @@ For Step 5: re-upload the same promoted file. `upload_project_pages.py` uses the
 - [agents/generator/AGENT.md](../../agents/generator/AGENT.md) — agent prompt (used when Claude is invoked as a sub-agent on this pipeline).
 - [agents/generator/README.md](../../agents/generator/README.md) — quick reference.
 - [docs/generator/plan.md](plan.md) — implementation plan with status.
-- [docs/task-generator/parser.md](../task-generator/parser.md) — downstream parser rules; the generator output must match.
+- [`agents/task-generator/parser.py`](../../agents/task-generator/parser.py) — downstream parser; the generator output must match. Authoritative routing rules duplicated in [`agents/generator/AGENT.md`](../../agents/generator/AGENT.md) "Routing rules".
 - [agents/task-generator/AGENT.md](../../agents/task-generator/AGENT.md) — Step 5 details.

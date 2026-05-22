@@ -8,7 +8,7 @@ Stellar Engine is a sibling toolkit that operates on target repos using grava + 
 
 Three sub-agents and one v0 sync layer make up the core:
 
-- **`agents/generator/`** — turns a markdown source document into reviewable spec drafts under `drafts/<project>/runs/<RID>/`. Five-step pipeline (init_run → extract → outline → render → diff vs prior run). Phase D LLM call is deferred — the outline step today runs manually via a Claude Code session. Never writes to Plane or grava; promotion into `systems/<Name>/business/` is a manual operator step. See [`agents/generator/README.md`](agents/generator/README.md), [`agents/generator/AGENT.md`](agents/generator/AGENT.md), and the full walkthrough in [`docs/generator/usage.md`](docs/generator/usage.md).
+- **`agents/generator/`** — turns a markdown source document into reviewable spec drafts under `drafts/<project>/runs/<RID>/`. Five-step pipeline (init_run → extract → outline → render → diff vs prior run). Phase D LLM call is deferred — the outline step today runs manually via a Claude Code session. Never writes to Plane or grava; promotion into `systems/<Name>/business/` is a manual operator step. See [`agents/generator/README.md`](agents/generator/README.md) and [`agents/generator/AGENT.md`](agents/generator/AGENT.md).
 - **`agents/task-generator/`** — converts a Plane spec page into a planned epic-story-task hierarchy, writes work items to Plane (with `blocking` relations), and mirrors the hierarchy to Grava in the target repo. Three-phase (preview / Plane / Grava), operator approval per turn. See [`agents/task-generator/AGENT.md`](agents/task-generator/AGENT.md). Phase 6 is current.
 - **`agents/orchestrator/`** — routes claimed grava issues to one of four teams: `task-generator` (epics), `fix-bug` (bug-type issues), `epic-task` (task/story → `/ship`), and `qa` (`qa-ready` label). Entry commands: `/deploy`, `/generate`, `/qa`. State persisted via grava wisps. See [`agents/orchestrator/AGENT.md`](agents/orchestrator/AGENT.md).
 - **Grava → Plane state sync (v0)** — `agents/task-generator/cli/grava_plane_sync.py` runs after every `grava signal` (coder/reviewer/pr-creator hooks on the grava side). Diffs status/assignee/comments, PATCHes Plane. Non-fatal (`|| true`). See [`docs/grava-plane-sync-setup.md`](docs/grava-plane-sync-setup.md) for `STELLAR_ENGINE_HOME` setup.
@@ -77,7 +77,7 @@ python3 cli/se generate --plane-project CAPP --plane-page <page-uuid>
                                                    # drafts namespace defaults to the Plane project code (CAPP).
                                                    # Pass --project <name> to override the namespace
                                                    # (and the system H1) in any mode.
-# See docs/generator/usage.md for the full walkthrough including manual outline step.
+# See agents/generator/README.md for the full walkthrough including manual outline step.
 
 # Generate work items from a Plane spec page (dry-run first)
 python3 cli/se taskgen <project_id> <page_id> --dry-run
@@ -141,11 +141,9 @@ To run it manually outside the daemon (parity testing, ad-hoc): `se orchestrator
 | [`docs/grava-plane-status-sync-plan.md`](docs/grava-plane-status-sync-plan.md) | v0 (shipped) + v0.1 outline for grava → Plane sync |
 | [`docs/grava-plane-sync-setup.md`](docs/grava-plane-sync-setup.md) | Operator setup: `STELLAR_ENGINE_HOME`, shell profile, verification |
 | [`docs/self-host/self-host-plane-plan.md`](docs/self-host/self-host-plane-plan.md) | Plan for running Plane locally |
-| [`docs/generator/usage.md`](docs/generator/usage.md) | Generator agent — full operator walkthrough (markdown → Plane → grava) |
-| [`docs/generator/plan.md`](docs/generator/plan.md) | Generator agent — phase-by-phase implementation plan + status |
-| [`docs/generator/epic-dependencies.md`](docs/generator/epic-dependencies.md) | Authoring guide for `## Epic dependencies` Mermaid graphs (grammar, label normalisation, fan-out examples, anti-patterns) |
-| [`agents/generator/README.md`](agents/generator/README.md) | Generator agent — quick reference |
-| [`docs/task-generator/`](docs/task-generator) | 11 design docs for task-generator (parser, planner, writers, data-model, …) |
+| [`agents/generator/README.md`](agents/generator/README.md) | Generator agent — quick reference + operator walkthrough |
+| [`docs/archive/generator/`](docs/archive/generator) | Archived generator implementation plan + usage walkthrough + epic-dependencies guide. Not authoritative; superseded by `agents/generator/README.md` and `AGENT.md`. |
+| [`docs/archive/task-generator/`](docs/archive/task-generator) | Archived pre-Phase-2 design docs for task-generator (parser, planner, writers, data-model, …). Not authoritative; superseded by `agents/task-generator/AGENT.md` and the code. |
 | [`docs/repository-folder-level-orchestrator/ORCHESTRATOR_AGENT.md`](docs/repository-folder-level-orchestrator/ORCHESTRATOR_AGENT.md) | In-repo orchestrator design (predecessor of `agents/orchestrator/`) |
 
 ## What this repo is NOT

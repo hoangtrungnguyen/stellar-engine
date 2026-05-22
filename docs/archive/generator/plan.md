@@ -216,7 +216,7 @@ class Section:
   - Plain bullet list directly under the story = tasks.
   - `#### Acceptance Criteria` H4 subsection (rendered iff `story.acceptance_criteria` non-empty) with one bullet per criterion.
   - `#### UI/UX Design` H4 subsection (rendered iff `story.design_links` non-empty) with one bullet per link (`[Label](url)` or bare URL/path).
-  - The downstream task-generator parser ([docs/task-generator/parser.md](../task-generator/parser.md)) maps H4 sections by heading text:
+  - The downstream task-generator parser ([`agents/task-generator/parser.py`](../../agents/task-generator/parser.py); rules summarised in [`agents/generator/AGENT.md`](../../agents/generator/AGENT.md) "Routing rules") maps H4 sections by heading text:
     - `Acceptance Criteria` → `story.acceptance_criteria`
     - `UI/UX Design` (or `Design`, `UX`, `UI`) → `story.design_links`
     - Bullets *before* any H4 → `TaskNode`s.

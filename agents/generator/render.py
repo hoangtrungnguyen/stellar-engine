@@ -1,7 +1,7 @@
 """Render an Outline IR into one markdown spec draft per epic.
 
 The output format is the contract consumed by `agents/task-generator/parser.py`
-(see `docs/task-generator/parser.md` and `docs/generator/plan.md` §E1):
+(see `agents/generator/AGENT.md` "Output format" + `docs/archive/generator/plan.md` §E1):
 
   - H1 = system name
   - H2 per epic; optional `> Depends on: …` blockquote when the epic has
