@@ -108,19 +108,22 @@ One agent. Orchestrator dispatches each phase. Operator approval still required 
 
 | Path | Purpose |
 |:---|:---|
-| `agents/generator/cli/publish.py` | Upload `drafts/*.md` to a Plane project page (per-project, not workspace wiki). |
-| `agents/generator/cli/taskify.py` | Plane page → Plane work items + blocking relations. Wraps parser/planner/plane_writer. |
-| `agents/generator/cli/mirror.py` | After taskify: Plane → grava mirror. Wraps grava_writer. |
+| `agents/generator/cli/publish.py` | Upload `drafts/*.md` to a Plane project page (per-project, not workspace wiki). Refuses paths under `systems/<N>/business/` (deny-list, §9). |
+| `agents/generator/cli/taskify.py` | Plane page OR `--source-md PATH` → Plane work items + blocking relations. Wraps parser/planner/plane_writer. |
+| `agents/generator/cli/mirror.py` | After taskify: Plane → grava mirror. Wraps grava_writer. Supports `--from-taskify-run <RID>` resume. |
 | `agents/generator/cli/techplan.py` | Per-epic + per-story emitter. Merges with existing files (preserves engineer-owned blocks byte-for-byte). |
+| `agents/generator/cli/full.py` | Chain orchestrator (`publish` → `taskify` → `mirror` → `techplan`). Single consolidated preview. |
 | `agents/generator/cli/epic_tech_plan_load.py` | Read existing per-epic tech-plan (frontmatter + tech-notes block) for the merge step. |
 | `agents/generator/cli/story_spec_load.py` | Read existing per-story spec (frontmatter + all 5 section blocks). |
-| `agents/generator/description_composer.py` | Build Plane work item `description_html` from the four sections (Requirements / AC / Tech Plan / UI-UX). Used by `plane_writer` on every create. |
-| `agents/generator/plane_search.py` | Plane search wrapper (projects, pages, issues by query). Powers “search for Plane APIs” story. |
-| `agents/orchestrator/cli/generator_publish.py` | Bridge: `se o generate publish` → `generator/cli/publish.py`. |
+| `agents/generator/description_composer.py` | Build Plane work item `description_html` from the four sections (Requirements / AC / Tech Plan / UI-UX). Used by `plane_writer` on every create. Rejects QA inputs. |
+| `agents/generator/plane_search.py` | Plane search wrapper (projects, pages, issues by query). Powers "search for Plane APIs" story. |
+| `agents/generator/state.py` | Cross-phase RunState dataclass + load/save helpers. Replaces task-generator's per-phase state files with one unified shape. |
+| `agents/orchestrator/cli/generator_publish.py` | Bridge: `se o generate publish` → `generator/cli/publish.py`. Sets `STELLAR_ORCH_DISPATCH=1` env var. |
 | `agents/orchestrator/cli/generator_taskify.py` | Bridge: `se o generate taskify` → `generator/cli/taskify.py`. Replaces `task_gen_expand.py`. |
 | `agents/orchestrator/cli/generator_mirror.py` | Bridge: `se o generate mirror` → `generator/cli/mirror.py`. |
 | `agents/orchestrator/cli/generator_techplan.py` | Bridge: `se o generate techplan` → `generator/cli/techplan.py`. |
-| `agents/generator/tests/test_publish_cli.py`, `test_taskify_cli.py`, `test_mirror_cli.py`, `test_techplan.py`, `test_plane_search.py` | One test file per new CLI. |
+| `agents/orchestrator/cli/generator_full.py` | Bridge: `se o generate full` → `generator/cli/full.py`. |
+| `agents/generator/tests/test_publish_cli.py`, `test_taskify_cli.py`, `test_mirror_cli.py`, `test_techplan.py`, `test_full_chain.py`, `test_plane_search.py`, `test_description_composer.py`, `test_story_spec_load.py`, `test_epic_tech_plan_load.py`, `test_state_cross_phase.py` | One test file per new module. |
 | `docs/generator/v2-architecture.md` | Operator-facing architecture doc (this plan distilled). |
 | `docs/generator/tech-plan-format.md` | Tech-plan markdown spec + frontmatter schema (see §7). |
 
@@ -149,19 +152,96 @@ One agent. Orchestrator dispatches each phase. Operator approval still required 
 
 All operator entry to Plane / grava writes goes through `se o generate <phase>`. No `se generate <phase>` for write phases.
 
-| Operator command | Bridge script | Underlying generator script | Notes |
-|:---|:---|:---|:---|
-| `se o generate extract <src>` | `generator_extract.py` (new) | `generator/cli/extract.py` | Read-only. Can also run via `se generate extract` (no bridge needed). |
-| `se o generate outline <src>` | n/a | manual | No code path today. Documented. |
-| `se o generate render <src>` | `generator_render.py` (new) | `generator/cli/render.py` | Read-only. `se generate render` still works. |
-| `se o generate publish <src> --plane-project <code\|uuid>` | `generator_publish.py` | `generator/cli/publish.py` | Writes Plane page(s) from a draft. Requires operator approval this turn. |
-| `se o generate taskify <project> <page>` | `generator_taskify.py` | `generator/cli/taskify.py` | Replaces `se taskgen` and `se o expand`. Plane page → work items. Requires approval. |
-| `se o generate mirror <project> <page> --target-repo <path>` | `generator_mirror.py` | `generator/cli/mirror.py` | Mirrors a taskified page to grava. Requires approval. |
-| `se o generate techplan <epic-id> --target-repo <path>` | `generator_techplan.py` | `generator/cli/techplan.py` | Emits `systems/<N>/business/tech-plan-<epic-slug>.md` with Plane + grava IDs in frontmatter. Idempotent. |
+### 5.1 CLI surface
 
-**Read-only phases** (`extract`, `render`) still expose `se generate <phase>` directly for the local-draft workflow. Write phases (`publish`, `taskify`, `mirror`, `techplan`) **only** exist under `se o generate`.
+| Operator command | Bridge script | Underlying generator script | Read/write | Notes |
+|:---|:---|:---|:---:|:---|
+| `se generate extract <src>` | n/a (direct) | `generator/cli/extract.py` | R | Source-md → `extract.json`. No Plane / grava touch. |
+| `se generate render <src>` | n/a (direct) | `generator/cli/render.py` | R | Manual `outline.json` → `drafts/*.md`. |
+| `se o generate publish <src> --plane-project <code\|uuid> [--page <uuid>] [--dry-run] [--yes]` | `generator_publish.py` | `generator/cli/publish.py` | W | Uploads a draft to a Plane project page (creates new page or replaces an existing one identified by `--page`). Refuses any path under `systems/<N>/business/` (deny-list, §9). |
+| `se o generate taskify <project> {<page>\|--source-md PATH} [--dry-run] [--yes] [--rewrite-plane-descriptions]` | `generator_taskify.py` | `generator/cli/taskify.py` | W | Replaces `se taskgen` and `se o expand`. Two source modes: `<page>` (Plane page UUID) or `--source-md PATH` (local md). Emits epics via `/epics/`, stories+tasks via `/work-items/`. Plane work item bodies composed via `description_composer.py` per §7.4. `--rewrite-plane-descriptions` opt-in: also patch existing items' bodies (default: leave engineer-edited descriptions alone). |
+| `se o generate mirror <project> {<page>\|--from-taskify-run <RID>} --target-repo <path> [--dry-run] [--yes]` | `generator_mirror.py` | `generator/cli/mirror.py` | W | Plane work items → grava issues. `--from-taskify-run` reuses an existing `runs/work/<RID>/` state so the operator can re-attempt grava after a taskify-success-mirror-fail split. |
+| `se o generate techplan {<project> <page>\|--from-taskify-run <RID>} --target-repo <path> [--dry-run] [--yes]` | `generator_techplan.py` | `generator/cli/techplan.py` | W | Emits per-epic + per-story md under `systems/<N>/business/`. Idempotent (preserves engineer carve-outs). Reads `runs/work/<RID>/` state for Plane + grava IDs. |
+| `se o generate full <src or page> [--project <code>] [--target-repo <path>] [--dry-run] [--yes]` | `generator_full.py` | `generator/cli/full.py` | W | Chain orchestrator: `publish` (if local md) → `taskify` → `mirror` → `techplan`. Single `--yes` covers the chain; individual phase approval still surfaces in interactive mode. |
 
-**Approval gates** carry over from task-generator: each write phase requires explicit `--yes` and a preview pass first.
+**Read-only phases** (`extract`, `render`) still expose `se generate <phase>` directly for the local-draft workflow. Write phases (`publish`, `taskify`, `mirror`, `techplan`, `full`) **only** exist under `se o generate`.
+
+### 5.2 Common flags (apply to every write phase)
+
+| Flag | Default | Behaviour |
+|:---|:---|:---|
+| `--dry-run` | false | Run preview + state writes; no Plane / grava calls. Exits 0 on success. |
+| `--yes` | false | Skip interactive confirmation prompt. Combine with `--dry-run` for unattended preview. |
+| `--run-id <id>` | UTC timestamp | Override the generated RID. Used to resume a partial run. |
+| `--on-failure {prompt,rollback,abort}` | `prompt` | What to do when a Plane/grava op fails mid-execute. |
+| `--json-report <path>` | `<repo>/runs/reports/<RID>.json` | Override report path. |
+| `--plane-profile <name>` / `--plane-config <path>` | (env) | Multi-workspace credential selection (existing). |
+| `--no-clone` | false | Refuse to auto-clone target repo if missing. |
+
+### 5.3 Exit code matrix
+
+Unified across write phases (current task-generator codes preserved):
+
+| Code | Meaning |
+|:---:|:---|
+| 0 | Success (including dry-run with non-empty preview). |
+| 1 | Bad input — missing file, bad UUID, credentials missing. |
+| 2 | Repo unresolved (no entry in `repo-map.yaml` AND no `--target-repo`) OR clone failed. |
+| 3 | Preflight failure (duplicate Plane page, missing required types). |
+| 4 | Cannot write — Plane work-item type(s) missing (story / task), refuses to continue. |
+| 5 | Plane / grava write failed mid-execute (state checkpointed, report written). |
+| 6 | Same as 5 but rollback succeeded. |
+| 7 | Dependency analyser failure (cycle without `--allow-dep-cycles`, or unresolved refs under `--strict-deps`). |
+| 8 | Hard-limit violation: phase invoked outside orchestrator dispatch (write phase only). |
+| 9 | Hard-limit violation: `publish.py` deny-listed path (`systems/<N>/business/`). |
+
+### 5.4 Orchestrator routing (grava issue → generator phase)
+
+The orchestrator dispatches generator phases based on the type/state of a claimed grava issue.
+
+```
+grava issue                          → generator phase
+─────────────────────────────────────────────────────────
+type=epic, state=backlog             → se o generate taskify
+type=epic, state=in-progress         → se o generate techplan   (refresh local md
+                                                                 from latest Plane state)
+type=epic, label=plane-out-of-sync   → se o generate mirror     (re-mirror to grava)
+type=story, no plane_id wisp         → (refuse — story needs an
+                                          epic taskify run first)
+type=story, has plane_id wisp        → no generator action; route to epic-task team
+```
+
+Routing table updates required (Phase H5):
+
+- `agents/orchestrator/cli/route.py`: `type == "epic"` → `team="generator"` (was `task-generator`).
+- `agents/orchestrator/cli/pick_ready.py`: same rename.
+- `agents/orchestrator/cli/daemon.py`: team list update.
+
+The orchestrator agent surfaces the dispatched phase + preview to the operator before any write. Per-phase approval lives in the orchestrator dispatcher (it sets `STELLAR_ORCH_DISPATCH=1` for the bridge script; the bridge gates on this env var per §9 hard limits).
+
+### 5.5 Cross-phase chaining (`se o generate full`)
+
+The `full` command runs the four write phases as a single transaction-ish chain. Failure semantics:
+
+```
+┌───────────┐  ok  ┌────────────┐  ok  ┌─────────────┐  ok  ┌──────────────┐
+│  publish  │ ───→ │  taskify   │ ───→ │   mirror    │ ───→ │  techplan    │
+└─────┬─────┘      └─────┬──────┘      └─────┬───────┘      └──────┬───────┘
+      │ fail              │ fail              │ fail               │ fail
+      ▼                   ▼                   ▼                    ▼
+  rollback on        rollback on         rollback on          (no rollback —
+  publish only       --on-failure        --on-failure          local files
+                     == rollback         == rollback           are idempotent;
+                                                               operator can
+                                                               re-run techplan
+                                                               alone)
+```
+
+**Resume**: after a failure, the operator can re-invoke any single phase with `--run-id <prior RID>` to resume from the next un-completed op. The state file in `runs/work/<RID>/state.json` tracks per-phase progress.
+
+**`publish` is conditional**: only runs when the input is a local `<src>` markdown file. If the operator passes a Plane `<page>` directly, `full` skips `publish` and starts at `taskify`.
+
+**Single approval per chain**: `--yes` on `se o generate full ...` covers all four phases. The chain prints a single consolidated preview before executing.
 
 ---
 
@@ -534,6 +614,108 @@ Lives at `docs/generator/tech-plan-format.md` (created in this branch). Covers f
 
 ---
 
+## 8.5 Run directory + state model
+
+All four write phases share one run directory keyed by `RID` (UTC timestamp by default, overridable via `--run-id`). One run = one Plane page (or one local md source) processed through up to four phases.
+
+### Directory layout
+
+```
+<target-repo>/runs/
+├── work/<RID>/                          ← per-phase intermediates
+│   ├── run.json                         ← {run_id, source, started_at, phases_completed}
+│   ├── page.json                        ← from taskify (or stub for source-md mode)
+│   ├── preflight.json                   ← Plane types + labels + sentinel lookup
+│   ├── ir.json                          ← parsed EpicNode[] from page or source-md
+│   ├── dep_graph.json                   ← dependency analyser output
+│   ├── plan.json                        ← planner CreateWorkItem ops queue
+│   ├── state.json                       ← cross-phase RunState (see schema below)
+│   ├── techplan_state.json              ← which per-epic/per-story files written, hashes
+│   └── publish_result.json              ← page UUID / URL after publish (if ran)
+│
+├── preview/<RID>/                       ← human-readable previews (operator approval)
+│   ├── master.preview.md                ← consolidated chain preview
+│   ├── publish.preview.md               ← which draft → which page
+│   ├── taskify.preview.md               ← epic/story/task tree + estimated count
+│   ├── mirror.preview.md                ← grava issues to be created
+│   └── techplan.preview.md              ← per-epic + per-story files that will be written
+│
+└── reports/<RID>.json                   ← terminal report (RunReport, all phases)
+```
+
+### Cross-phase `RunState` (single source of truth)
+
+```python
+@dataclass
+class RunState:
+    run_id: str
+    project_id: str
+    page_id: str | None         # None when source-md mode
+    source_md_path: str | None  # set when source-md mode
+    target_repo: str
+    started_at: str             # ISO 8601 UTC
+    finished_at: str | None
+
+    # Phase progress: each phase marked done after final op + state write.
+    phases_completed: list[str]  # ["publish", "taskify", "mirror", "techplan"]
+    phase_in_progress: str | None
+    failed_op_index: int | None
+    failure_detail: str | None
+    rolled_back: bool
+
+    # Resolved IDs (populated incrementally as phases run).
+    plane_page_id: str | None           # set by publish (if ran)
+    plane_page_url: str | None
+    ref_to_plane_uuid: dict[str, str]   # "epic:0", "story:0.1" → Plane work item uuid
+    ref_to_plane_seq: dict[str, int]    # → sequence_id
+    ref_to_grava_id: dict[str, str]     # → grava issue id
+
+    # Per-phase op-level checkpoints (current task-generator already has these).
+    completed_op_indices: list[int]
+    plane_relations_posted: list[str]
+    plane_comments_posted: list[str]
+    dep_edges_posted: list[str]
+
+    # Per-techplan file hashes — operator can verify nothing changed since last run.
+    techplan_file_hashes: dict[str, str]  # abs path → sha256
+```
+
+Two helper modules read/write this:
+
+- `agents/generator/state.py` — `load_state(path)`, `save_state(state, path)`, atomic write via tmp+rename.
+- `agents/generator/cli/init_run.py` (existing) — bootstraps `state.json` on first phase, no-ops on resume.
+
+### Idempotency contract per phase
+
+| Phase | Read | Write | Resume semantics |
+|---|---|---|---|
+| `publish` | source draft md | Plane page (create or replace), `publish_result.json` | If `state.plane_page_id` set, refuses re-create unless `--replace`. |
+| `taskify` | `state.plane_page_id` or `source_md_path`, parses → `ir.json`, plans → `plan.json` | Plane work items, `state.ref_to_plane_uuid`, `state.completed_op_indices` | Skips ops in `completed_op_indices`. Re-runs of completed ops are no-ops via sentinel label diff. |
+| `mirror` | `ir.json` + `state.ref_to_plane_uuid` from prior taskify | grava issues, Plane comments, `state.ref_to_grava_id` | Skip-by-grava-id-on-disk; re-runs are no-op. |
+| `techplan` | `state.ref_to_plane_uuid` + `state.ref_to_grava_id` | per-epic + per-story md files, `techplan_state.json`, `state.techplan_file_hashes` | Loader merges with existing files; engineer-owned blocks preserved. Generator-managed blocks regenerated. No-op if all hashes match prior run. |
+
+**Critical**: `state.json` is the only file shared across phases. Re-running `mirror` after a successful `taskify` reads `state.ref_to_plane_uuid` and skips the Plane fetch entirely. This is what `--from-taskify-run <RID>` enables.
+
+### Failure surface
+
+```
+Phase fails mid-execute → on_failure handler:
+  - abort:    state.json captures failed_op_index + failure_detail;
+              report written; non-zero exit. No rollback.
+  - rollback: phase-specific rollback (Plane delete-in-reverse for taskify;
+              grava close-with-comment for mirror; no rollback for techplan).
+              state.rolled_back = true.
+  - prompt:   interactive y/N/skip; falls through to abort or rollback.
+
+Cross-phase resume:
+  - se o generate <phase> --run-id <prior_RID>  ← reads state.json, continues
+  - se o generate full ... --run-id <prior_RID> ← resumes the chain
+```
+
+---
+
+---
+
 ## 9. Hard limits (updated)
 
 The generator’s `AGENT.md` `Hard limits` section becomes:
@@ -556,9 +738,45 @@ Removed limits (were on the old generator):
 
 ## 10. Testing strategy
 
-- **Unit**: every migrated module keeps its existing tests under `agents/generator/tests/`. Add new tests for `publish`, `mirror`, `techplan`, `plane_search`.
-- **Integration (sandbox)**: an end-to-end test fixture: source markdown → `se o generate extract|render|publish|taskify|mirror|techplan` against `stellar-sandbox`. Documented in `docs/generator/v2-architecture.md`.
-- **Regression**: confirm `grava_plane_sync.py` behaviour unchanged via the existing `tests/cli/test_grava_plane_sync.py` (migrate alongside its module).
+### 10.1 Unit tests
+
+Every migrated module keeps its existing tests under `agents/generator/tests/`. New tests:
+
+| Module | Test file | Key cases |
+|---|---|---|
+| `publish.py` | `test_publish_cli.py` | upload new page, replace existing page (`--page`), deny-list refuses `systems/<N>/business/` (exit 9), missing source file (exit 1). |
+| `taskify.py` | `test_taskify_cli.py` | dry-run preview from Plane page, dry-run preview from `--source-md`, mutex check, full write with `--yes`, resume from prior `--run-id`, rollback on `--on-failure rollback`, idempotent re-run skips completed ops. |
+| `mirror.py` | `test_mirror_cli.py` | mirror after taskify, `--from-taskify-run <RID>` resume, re-run no-ops, grava-side rollback. |
+| `techplan.py` | `test_techplan.py` | per-epic file emission, per-story file emission, engineer carve-out preservation (`## Tech Plan` + `## QA Plan` + `## Tech notes`), file-hash idempotency, epic-rename self-heal (lookup by `plane_issue_id`). |
+| `full.py` | `test_full_chain.py` | full chain ok, fail at each phase + correct resume hint, `publish` skipped when input is Plane page, single `--yes` covers chain. |
+| `description_composer.py` | `test_description_composer.py` | 4-section HTML output, QA input rejected (raises), empty placeholders for missing sections, per-node-kind shape (epic/story/task). |
+| `story_spec_load.py`, `epic_tech_plan_load.py` | one each | exists/missing split, section boundary parsing, preserves engineer blocks exactly. |
+| `plane_search.py` | `test_plane_search.py` | projects / pages / issues search, pagination, auth scope check. |
+| `state.py` | `test_state_cross_phase.py` | atomic write, resume round-trip, frontmatter on each phase load. |
+
+### 10.2 Integration tests (sandbox)
+
+End-to-end runs against `stellar-sandbox` (Plane workspace + sibling target repo).
+
+| Scenario | Verifies |
+|---|---|
+| `se generate <src> --plane-project SANDBOX --plane-page <p>` + edit drafts + `se o generate full --source-md drafts/X.md --yes` | Full workflow: download → edit → publish → taskify → mirror → techplan. |
+| Mid-taskify failure (kill Plane API) + resume with `--run-id` | State recovery, op-level checkpoint. |
+| `se o generate techplan` against a system that already has engineer-edited `## Tech Plan` blocks | Carve-out preservation byte-for-byte. |
+| `se o generate publish drafts/X.md` against a system that has `tech-plan-foo.md` | Deny-list refuses paths under `systems/<N>/business/` (exit 9). |
+| Re-run `se o generate full` on same source 24h later (operator made changes to outline) | Reconcile path: skips unchanged, updates only what's diff'd. |
+
+A sandbox harness script lives at `agents/generator/tests/sandbox/e2e.sh` (operator-runnable, not in CI). Documented in `docs/generator/v2-architecture.md`.
+
+### 10.3 Regression
+
+- `grava_plane_sync.py` behaviour unchanged via the existing `tests/cli/test_grava_plane_sync.py` (migrate alongside its module).
+- All 276 task-generator tests must pass post-migration with renamed imports.
+- Orchestrator routing tests (`test_route.py`, `test_pick_ready.py`) updated for `task-generator` → `generator` team rename.
+
+### 10.4 CI scope
+
+Unit tests run per-PR (`pytest agents/generator/tests/ agents/orchestrator/tests/`). Integration tests are operator-driven against sandbox (no CI auth to Plane). H7 adds a `make smoke-sandbox` target that runs the end-to-end harness with operator-supplied credentials.
 
 ---
 
@@ -584,6 +802,10 @@ Removed limits (were on the old generator):
 6. **Story slug collision on rename.** When an epic is renamed (epic-slug changes), existing per-story files become orphaned by filename. Options: (a) loader treats `plane_issue_id` as the primary key and rewrites filenames on mismatch; (b) operator runs a one-off `se o generate rename-epic` to migrate. Recommendation: (a) — generator self-heals via the Plane ID. Confirm.
 7. **Plane "Tech Plan" section at create time.** Per §7.4 it renders as a placeholder (`<em>To be filled by the engineering team.</em>`). Alternative: pull current `## Tech notes` block from the per-epic file (if it exists at create time). Recommendation: placeholder. Engineers update Plane manually; local tech plan stays the source of truth. Confirm.
 8. **Re-running `taskify` against a Plane work item that already exists.** The reconcile phase (carried over from current task-generator) updates title + description by default. With structured sections in Plane now, should reconcile rewrite the entire description, or only the `## Requirements` + `## Acceptance Criteria` + `## UI/UX Design` sections (leaving `## Tech Plan` untouched since engineers may have edited it)? Recommendation: leave `## Tech Plan` untouched; reconcile only sync-from-outline-able sections. Confirm.
+9. **`STELLAR_ORCH_DISPATCH=1` env-var gate.** Write phases refuse to run unless the orchestrator set this. Alternative: a CLI flag (`--from-orchestrator`) that's clearer in stack traces but easier to spoof. Recommendation: env var — the orchestrator always sets it, and operators trying direct invocation get a fast loud failure. Confirm.
+10. **`runs/work/<RID>/` retention.** Today the directory grows unbounded. Should H6 add a `se o generate prune --before <date>` command, or cron a 30-day cleanup? Recommendation: prune command, operator-invoked. Confirm.
+11. **Test fixture for sandbox e2e (§10.2).** Should the harness script ship in `agents/generator/tests/sandbox/` (operator runs ad-hoc) or be an explicit `make` target reading credentials from `.env`? Recommendation: shell script + `make smoke-sandbox` target. Confirm.
+12. **`se o generate full` failure-recovery UX.** When phase 3 of 4 fails, should the operator see a structured next-step hint (e.g. "Resume with: `se o generate techplan --run-id <RID>`") or just the standard report path? Recommendation: structured hint printed to stderr, plus standard report. Confirm.
 
 ---
 
