@@ -53,6 +53,12 @@ python3 cli/se init                                # scaffold repos.yaml, polici
 python3 cli/se repos                               # list configured repos (bare = list)
 python3 cli/se repos add <name> --path <abs-path>  # register repo + `grava init` if .grava absent
 python3 cli/se doctor --dir .                      # validate tools, repos, generator, .env, drafts/
+python3 cli/se projects list                       # workspace projects table (public-only default)
+python3 cli/se projects list --include-private     # also list secret projects
+python3 cli/se projects show CAPP                  # one project's details
+python3 cli/se projects members CAPP               # member roster
+python3 cli/se projects states CAPP                # workflow states (Backlog → Cancelled)
+# Full reference: docs/cli/se-projects.md
 python3 cli/se download <plane-project-uuid>       # pull Plane pages → systems/<workspace>/<project>/
 python3 cli/se download CAPP                       # accepts short identifier; resolves to UUID via Plane API
 python3 cli/se download CAPP --page-id <uuid>      # fetch only one page (skips the project listing)
@@ -140,6 +146,7 @@ To run it manually outside the daemon (parity testing, ad-hoc): `se orchestrator
 | [`README.md`](README.md) | End-user install + quick start |
 | [`docs/install.md`](docs/install.md) | Binary build + release flow (PyInstaller + GH Actions) |
 | [`docs/cli/se-download.md`](docs/cli/se-download.md) | `se download` — pull Plane pages to local markdown (full flag reference + recipes) |
+| [`docs/cli/se-projects.md`](docs/cli/se-projects.md) | `se projects` — inspect Plane projects, members, workflow states (4 subcommands: list / show / members / states) |
 | [`docs/stellar-engine/strategy.md`](docs/stellar-engine/strategy.md) | System-wide design and roadmap |
 | [`docs/stellar-engine/plan.md`](docs/stellar-engine/plan.md) | Open gaps and phase-by-phase plan |
 | [`docs/ship-bug/strategy.md`](docs/ship-bug/strategy.md) | `/ship-bugfix` (fix-bug team) pipeline design |
