@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import plane_writer  # noqa: E402
-from ir import EpicNode, ParseWarning, RunState, StoryNode, TaskNode  # noqa: E402
+from ir import DesignLink, EpicNode, ParseWarning, RunState, StoryNode, TaskNode  # noqa: E402
 from plane_client import PlaneClient, load_credentials  # noqa: E402
 from planner import plan_from_cached  # noqa: E402
 
@@ -33,6 +33,11 @@ def _ir_from_dict(d: dict) -> EpicNode:
             description_md=s.get("description_md", ""),
             type_marker=s.get("type_marker"),
             related_refs=list(s.get("related_refs", [])),
+            acceptance_criteria=list(s.get("acceptance_criteria", [])),
+            design_links=[
+                DesignLink(url=dl.get("url", ""), label=dl.get("label"))
+                for dl in s.get("design_links", [])
+            ],
         )
         for t in s.get("tasks", []):
             story.tasks.append(TaskNode(
@@ -82,7 +87,7 @@ def main() -> int:
         return 1
 
     type_map = pre_blob.get("type_uuids", {})
-    missing = [k for k in ("epic", "story", "task") if not type_map.get(k)]
+    missing = [k for k in ("story", "task") if not type_map.get(k)]
     if missing:
         print(
             f"Cannot write — Plane work-item type(s) missing: {', '.join(missing)}. "
