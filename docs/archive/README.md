@@ -24,3 +24,11 @@ Implementation plan + operator walkthrough + epic-dependencies authoring guide f
 - `agents/generator/README.md` — quick-start, operator entry, output format, hard limits.
 - `agents/generator/AGENT.md` — agent prompt, failure-modes table, routing rules.
 - `agents/generator/` code — ground truth for all CLI flags and exit codes.
+
+## grava-plane-status-sync-plan.md
+
+Original v0 planning artifact for the grava → Plane status sync feature, archived on 2026-05-23. The feature has shipped as `agents/task-generator/cli/grava_plane_sync.py` (not the proposed `sync_plane_status.py` name in the plan). Authoritative replacements:
+
+- `docs/cli/se-plane-sync.md` — command reference (flags, modes, exit codes, examples).
+- `docs/grava-plane-sync-setup.md` — operator setup (`STELLAR_ENGINE_HOME`, shell profile, hook verification).
+- `agents/task-generator/cli/grava_plane_sync.py` — the shipped implementation.

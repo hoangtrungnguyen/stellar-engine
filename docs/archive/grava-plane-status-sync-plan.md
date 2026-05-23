@@ -1,5 +1,7 @@
 # Plan — Grava coding team → Plane status sync
 
+> **Archived 2026-05-23.** This was the original v0 planning artifact for the grava → Plane status sync feature. The feature has shipped. The script is `agents/task-generator/cli/grava_plane_sync.py` (not the proposed `sync_plane_status.py` name from this plan). For the live command reference, see [`docs/cli/se-plane-sync.md`](../cli/se-plane-sync.md). For operator setup, see [`docs/grava-plane-sync-setup.md`](../grava-plane-sync-setup.md). Sections below are preserved verbatim for historical context only — some details no longer match the shipped implementation.
+
 ## Goal
 
 When the grava coding team transitions an issue's state (claim, code-review,
