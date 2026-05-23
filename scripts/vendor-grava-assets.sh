@@ -62,6 +62,26 @@ if [ -d "$SRC/scripts/ship" ]; then
     cp -R "$SRC/scripts/ship" "$VENDOR_DIR/scripts/"
 fi
 
+# Top-level scripts referenced by /ship + pr-creator.md:
+#   preflight-gh.sh    REQUIRED by /ship line 69 (`|| exit 1`)
+#   pre-merge-check.sh OPTIONAL — pr-creator runs if executable
+#   agent-bot-token.sh OPTIONAL — pr-creator sources for bot identity
+# Without these in the vendored set, every `se repos add` leaves the target
+# repo with a broken /ship preflight gate (manual file copies required).
+for top_script in preflight-gh.sh pre-merge-check.sh agent-bot-token.sh; do
+    if [ -f "$SRC/scripts/$top_script" ]; then
+        mkdir -p "$VENDOR_DIR/scripts"
+        cp "$SRC/scripts/$top_script" "$VENDOR_DIR/scripts/"
+    fi
+done
+
+# scripts/agent-bot/ — REQUIRED by pr-creator.md (finalize-pr.sh runs after
+# every `gh pr create`). Vendored whole-dir; install copies recursively.
+if [ -d "$SRC/scripts/agent-bot" ]; then
+    mkdir -p "$VENDOR_DIR/scripts"
+    cp -R "$SRC/scripts/agent-bot" "$VENDOR_DIR/scripts/"
+fi
+
 # Stamp the vendored commit so `se` can surface it via `se doctor`.
 ( cd "$SRC" && git rev-parse HEAD 2>/dev/null || echo unknown ) > "$VENDOR_DIR/VENDORED_COMMIT"
 

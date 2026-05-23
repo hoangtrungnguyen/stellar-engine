@@ -1078,6 +1078,33 @@ def _install_grava_assets(
         shutil.copytree(src, dst, dirs_exist_ok=True)
         status.append(f"  {'updated' if existed else 'created'}  {dst}/")
 
+    # Install grava's scripts/ tree — required by /ship + pr-creator.
+    #
+    # /ship references:
+    #   ./scripts/preflight-gh.sh       — gh auth + scope check (required)
+    #   ./scripts/ship/dep-check.sh     — blocker check (required)
+    #
+    # pr-creator.md references:
+    #   ./scripts/pre-merge-check.sh    — optional (run if executable)
+    #   ./scripts/agent-bot-token.sh    — optional (sourced for bot identity)
+    #   ./scripts/agent-bot/finalize-pr.sh — required after `gh pr create`
+    #
+    # Whatever the vendor script staged under vendored/grava/scripts/ gets
+    # copied here. Mode bits are preserved by shutil.copy2 / copytree.
+    src_scripts = grava_src / "scripts"
+    if src_scripts.is_dir():
+        dst_scripts = repo_path / "scripts"
+        dst_scripts.mkdir(parents=True, exist_ok=True)
+        for entry in sorted(src_scripts.iterdir()):
+            dst = dst_scripts / entry.name
+            existed = dst.exists()
+            if entry.is_dir():
+                shutil.copytree(entry, dst, dirs_exist_ok=True)
+                status.append(f"  {'updated' if existed else 'created'}  {dst}/")
+            else:
+                shutil.copy2(entry, dst)
+                status.append(f"  {'updated' if existed else 'created'}  {dst}")
+
     return status, missing
 
 
@@ -1208,6 +1235,25 @@ def cmd_repos_add(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         print(f"  created  {grava_marker}/")
+
+    # ── stellar-engine-root pointer ──────────────────────────────────────────
+    # Writes the workspace root path into <target>/.grava/stellar-engine-root.
+    # Orchestrator CLI scripts (tech_plan_load.py, etc.) read this file when
+    # running from the PyInstaller binary — `__file__` resolves to a temp dir
+    # in that mode and can't walk up to find repo-map.yaml. The pointer makes
+    # the binary location-independent without requiring $STELLAR_ENGINE_HOME.
+    # Always rewritten (even when grava init was skipped) so the path stays
+    # in sync if the operator moved the stellar-engine checkout.
+    if grava_marker.exists() or not args.no_init:
+        pointer = grava_marker / "stellar-engine-root"
+        try:
+            pointer.write_text(f"{base}\n")
+            print(f"  wrote    {pointer}")
+        except OSError as exc:
+            print(
+                f"  WARN     could not write {pointer}: {exc}",
+                file=sys.stderr,
+            )
 
     # ── grava agent-team (.claude/agents + .claude/skills) ────────────────
     # Mirrors Path B.3 of grava's INSTALL_AGENT_TEAM.md. Default ON; skip
@@ -2072,6 +2118,48 @@ def cmd_orchestrator_doctor(args: argparse.Namespace) -> None:
     sys.exit(_orch_invoke("doctor.py", "orch_doctor", argv))
 
 
+def cmd_orchestrator_pick(args: argparse.Namespace) -> None:
+    """List next ready issues for a team. Restored 2026-05 for agent use.
+
+    The previous CLI surface removed `pick` in favour of an internal call
+    via `cmd_orchestrator_deploy`. Re-exposed because the orchestrator
+    AGENT.md needs a location-independent way to enumerate candidates
+    (the agent runs in a target-repo cwd and cannot reach the source
+    `agents/orchestrator/cli/pick_ready.py` path).
+    """
+    argv = ["--team", args.team, "--target-repo", args.target_repo]
+    if args.limit is not None:
+        argv += ["--limit", str(args.limit)]
+    sys.exit(_orch_invoke("pick_ready.py", "orch_pick_ready", argv))
+
+
+def cmd_orchestrator_expand(args: argparse.Namespace) -> None:
+    """Resolve a grava epic → Plane page_id → task-generator delegation.
+
+    Restored 2026-05 for agent use (same reason as `pick`). `deploy <epic-id>`
+    routes through this internally; the standalone subcommand gives the
+    agent a one-step invocation without going through the full deploy
+    machinery.
+    """
+    argv = [args.id, "--target-repo", args.target_repo]
+    if args.dry_run:
+        argv.append("--dry-run")
+    sys.exit(_orch_invoke("task_gen_expand.py", "orch_task_gen_expand", argv))
+
+
+def cmd_orchestrator_tech_plan(args: argparse.Namespace) -> None:
+    """Resolve and report the tech plan file path for a target repo.
+
+    Wraps `tech_plan_load.py`. Output is a JSON object describing the
+    resolved `system_name` + `tech_plan_path`. The agent calls this once
+    at session start (before `pick`) to load project context.
+    """
+    argv = ["--target-repo", args.target_repo]
+    if args.system:
+        argv += ["--system", args.system]
+    sys.exit(_orch_invoke("tech_plan_load.py", "orch_tech_plan_load", argv))
+
+
 def cmd_orchestrator_epic_task_claim(args: argparse.Namespace) -> None:
     argv = [args.id, "--target-repo", args.target_repo]
     if args.actor:
@@ -2220,23 +2308,116 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    # 4. Compose the /deploy command sent into the Claude session.
-    slash_parts = ["/deploy"]
-    if args.id:
-        slash_parts.append(args.id)
-    if args.team:
-        slash_parts += ["--team", args.team]
-    if args.all:
-        slash_parts.append("--all")
-    if args.limit:
-        slash_parts += ["--limit", str(args.limit)]
-    if args.dry_run:
-        slash_parts.append("--dry-run")
-    if getattr(args, "stop_on_error", False):
-        slash_parts.append("--stop-on-error")
-    slash_cmd = " ".join(slash_parts)
+    # 4. Resolve issue IDs and compose per-team slash commands.
+    #    Replaces the old orchestrator-agent delegation: instead of sending
+    #    `/deploy --team T` (which spun up the orchestrator subagent to do
+    #    claim+implement), we pick ready issues HERE and send the team's
+    #    skill slash (`/ship <id>` / `/qa <id>` / `/generate <id>`) directly.
+    #    Each skill handles its own claim → implement → review → PR phases.
+    #    The orchestrator AGENT remains installed for ad-hoc `/deploy` usage
+    #    inside Claude, but `se o deploy` no longer routes through it.
 
-    session_name = f"stellar-deploy-{args.repo}"
+    TEAM_TO_SKILL = {
+        "epic-task":      "/ship",
+        "fix-bug":        "/ship",
+        "qa":             "/qa",
+        "task-generator": "/generate",
+    }
+
+    def _capture_orch_main(script_name: str, mod_name: str, argv: list[str]):
+        """Run an orchestrator CLI script and capture its stdout as JSON.
+
+        The scripts print JSON to stdout (their public contract). We need
+        that JSON in-process to drive deploy's slash composition — running
+        them via _orch_invoke would sys.exit and break the loop.
+        """
+        from io import StringIO
+        script = _orch_script(script_name)
+        if not script.exists():
+            print(f"ERROR: {script} not found", file=sys.stderr)
+            sys.exit(1)
+        mod = _load_module(mod_name, script)
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        try:
+            rc = mod.main(argv)
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else 1
+        captured = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        return rc, captured
+
+    # 4a. Resolve team + issue IDs.
+    if args.id:
+        # Explicit ID. If --team not given, route to derive team.
+        if args.team:
+            team = args.team
+        else:
+            rc, out = _capture_orch_main(
+                "route.py", "orch_route_deploy",
+                [args.id, "--target-repo", target_repo],
+            )
+            if rc != 0:
+                print(f"ERROR: route.py failed for {args.id} (exit {rc})",
+                      file=sys.stderr)
+                sys.exit(1)
+            try:
+                team = json.loads(out).get("team", "")
+            except json.JSONDecodeError:
+                print(f"ERROR: route.py returned non-JSON: {out[:200]}",
+                      file=sys.stderr)
+                sys.exit(1)
+        if team not in TEAM_TO_SKILL:
+            print(f"ERROR: no slash command mapped for team '{team}'",
+                  file=sys.stderr)
+            sys.exit(1)
+        ids = [args.id]
+    else:
+        # No ID — pick from the team's ready queue.
+        if not args.team:
+            print("ERROR: --team T required (or pass an explicit <id>)",
+                  file=sys.stderr)
+            sys.exit(2)
+        team = args.team
+        if team not in TEAM_TO_SKILL:
+            print(f"ERROR: no slash command mapped for team '{team}'",
+                  file=sys.stderr)
+            sys.exit(1)
+        pick_limit = (args.limit or 100) if args.all else 1
+        rc, out = _capture_orch_main(
+            "pick_ready.py", "orch_pick_deploy",
+            ["--team", team, "--limit", str(pick_limit),
+             "--target-repo", target_repo],
+        )
+        if rc != 0:
+            print(f"ERROR: pick_ready.py failed for team '{team}' "
+                  f"(exit {rc})", file=sys.stderr)
+            sys.exit(1)
+        try:
+            candidates = json.loads(out) if out.strip() else []
+        except json.JSONDecodeError:
+            candidates = []
+        if not candidates:
+            print(f"No ready issues for team '{team}' in repo "
+                  f"'{args.repo}'.")
+            sys.exit(0)
+        ids = [c["id"] for c in candidates]
+
+    # 4b. Compose one slash command per ID.
+    skill = TEAM_TO_SKILL[team]
+    slash_extras: list[str] = []
+    if args.dry_run:
+        slash_extras.append("--dry-run")
+    slash_cmds = [
+        " ".join([skill, iid, *slash_extras]).strip() for iid in ids
+    ]
+
+    # One terminal per (repo, team). Multiple issues from --all run
+    # sequentially in the SAME Claude session — each /ship completes
+    # before the next dispatches. Different teams on the same repo open
+    # in separate sessions (parallel /ship + /qa, etc.).
+    session_name = f"stellar-deploy-{args.repo}-{team}"
+
     detach = getattr(args, "detach", False)
     # `--detach` opts out of auto-attach. Default: open a NEW terminal
     # window running `tmux attach`. If no GUI terminal is available
@@ -2297,14 +2478,7 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
 
         Three strategies, in order:
           1. Try to open a NEW GUI terminal window running `tmux attach`.
-             This is the primary path on macOS / desktop Linux. It works
-             whether or not the operator is already inside tmux — the new
-             window starts a fresh tmux client outside the current pane,
-             so the operator's existing tmux session is untouched.
-          2. If no GUI terminal is available BUT we're inside a tmux
-             client, `tmux switch-client -t <session>` (changes the
-             current client's view; the only sensible move in pure-tmux
-             headless contexts).
+          2. If no GUI terminal AND we're inside tmux, `switch-client`.
           3. Else `tmux attach` in the current shell (SSH / no-tmux).
         """
         attach_cmd = f"tmux attach -t {session_name}"
@@ -2313,8 +2487,6 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             return
 
         if inside_tmux:
-            # GUI spawn failed but we are inside tmux. switch-client is
-            # the only way to actually show the session to the operator.
             print(f"  No GUI terminal detected; switching tmux client to "
                   f"{session_name}.")
             subprocess.run(
@@ -2323,12 +2495,26 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
             )
             return
 
-        # No GUI terminal and not inside tmux — take over the current
-        # shell so the operator at least sees the session immediately.
         print(f"  No GUI terminal detected; attaching in current shell.")
         os.execvp("tmux", ["tmux", "attach", "-t", session_name])
 
-    # 5. Check if the session already exists.
+    def _send_all_slash_cmds() -> None:
+        """Send each slash command into the (single) tmux session.
+
+        Batch mode (--all) sends N commands separated by ~1s. Claude
+        processes them in order — each /ship completes before the next
+        dispatches. All run in the ONE Claude process owned by this
+        session, so context + worktree state are shared sequentially.
+        """
+        for idx, cmd in enumerate(slash_cmds):
+            subprocess.run(
+                ["tmux", "send-keys", "-t", session_name, cmd, "Enter"],
+                check=True,
+            )
+            if idx < len(slash_cmds) - 1:
+                _time.sleep(1.0)
+
+    # 5. Create or reuse the (repo, team) tmux session.
     existing = subprocess.run(
         ["tmux", "has-session", "-t", session_name],
         capture_output=True,
@@ -2336,46 +2522,46 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
     session_exists = existing.returncode == 0
 
     if session_exists:
-        # Send the new /deploy into the running session — queues more work
-        # without restarting Claude (preserves context, in-flight state).
-        print(f"Session '{session_name}' already running — queueing new command.")
+        # Reuse the running session — queue new commands without
+        # restarting Claude (preserves context, in-flight worktrees,
+        # wisp state).
+        print(f"Session '{session_name}' already running — queueing "
+              f"{len(slash_cmds)} command(s).")
         print(f"  Repo:    {args.repo} → {target_repo}")
-        print(f"  Sending: {slash_cmd}")
-        subprocess.run(
-            ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
-            check=True,
-        )
+        print(f"  Team:    {team} → {skill}")
+        for cmd in slash_cmds:
+            print(f"  Sending: {cmd}")
+        _send_all_slash_cmds()
         if attach:
             _switch_or_attach()
         else:
             print(f"  Attach:  tmux attach -t {session_name}")
         return
 
-    # 6. New session: create detached, start claude, wait, send command.
+    # 6. New session: create detached, start claude, wait, send command(s).
     subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session_name, "-c", target_repo],
+        ["tmux", "new-session", "-d", "-s", session_name,
+         "-c", target_repo],
         check=True,
     )
     subprocess.run(
         ["tmux", "send-keys", "-t", session_name, "claude", "Enter"],
         check=True,
     )
-    # Sleep matches the prior `se o start` heuristic — 3s gives Claude
-    # time to initialise before its stdin is fed the first command.
-    _time.sleep(3)
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, slash_cmd, "Enter"],
-        check=True,
-    )
+    _time.sleep(3)  # Claude init time
+    _send_all_slash_cmds()
 
     print("Deploy session started.")
     print(f"  Session: {session_name}")
     print(f"  Repo:    {args.repo} → {target_repo}")
-    print(f"  Command: {slash_cmd}")
+    print(f"  Team:    {team} → {skill}")
+    if len(slash_cmds) == 1:
+        print(f"  Command: {slash_cmds[0]}")
+    else:
+        print(f"  Commands ({len(slash_cmds)} sequential):")
+        for cmd in slash_cmds:
+            print(f"    {cmd}")
     if attach:
-        # Print before handing off — output lands in the operator's
-        # scrollback if the new-window path fails and we take over the
-        # current shell.
         print(f"  Opening attach in new window… "
               f"(Ctrl+B d to detach later, "
               f"`tmux kill-session -t {session_name}` to stop)")
@@ -2658,13 +2844,20 @@ def main() -> None:
     p_orch_route.add_argument("id", help="Grava issue ID")
     p_orch_route.add_argument("--target-repo", default=".", metavar="PATH")
 
-    # NOTE: `se o pick` was removed. The picker logic still ships as
-    # `agents/orchestrator/cli/pick_ready.py` and is invoked internally
-    # by `cmd_orchestrator_deploy` (via `_orch_pick_ids`) for the `--all`
-    # batch loop and the no-arg auto-pick path. Operators who need the
-    # raw ready list can call the script directly:
-    #   python3 agents/orchestrator/cli/pick_ready.py --team T --limit N
-    #   grava ready --json --limit N
+    # se orchestrator pick --team T [--limit N]
+    # Re-added 2026-05: the orchestrator AGENT runs in target-repo cwd and
+    # cannot reach `python3 agents/orchestrator/cli/pick_ready.py` directly.
+    # `se o pick` is the location-independent surface.
+    p_orch_pick = orch_sub.add_parser(
+        "pick",
+        help="List next ready issues for a team (JSON array on stdout)",
+    )
+    p_orch_pick.add_argument(
+        "--team", required=True,
+        choices=("fix-bug", "epic-task", "qa", "task-generator"),
+    )
+    p_orch_pick.add_argument("--limit", type=int, default=None, metavar="N")
+    p_orch_pick.add_argument("--target-repo", default=".", metavar="PATH")
 
     # se orchestrator doctor
     p_orch_doc = orch_sub.add_parser(
@@ -2675,10 +2868,33 @@ def main() -> None:
     p_orch_doc.add_argument("--json", action="store_true")
     _add_plane_profile_flags(p_orch_doc)
 
-    # NOTE: `se o expand` was removed. To dispatch a known epic into the
-    # task-generator pipeline use `se o deploy <epic-id>` instead — it
-    # routes the epic to the `task-generator` team which invokes the
-    # underlying `task_gen_expand.py` script the same way `expand` did.
+    # se orchestrator expand <epic-id>
+    # Re-added 2026-05: same reason as `pick` — agent calls this directly
+    # to delegate an epic into task-generator without going through deploy.
+    p_orch_exp = orch_sub.add_parser(
+        "expand",
+        help="Delegate a grava epic to the task-generator pipeline "
+             "(resolves tg:src:<page_id> label → Plane page)",
+    )
+    p_orch_exp.add_argument("id", help="Grava epic issue ID")
+    p_orch_exp.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_exp.add_argument("--dry-run", action="store_true",
+                            help="Phase A preview only; skip operator gate")
+
+    # se orchestrator tech-plan
+    # Resolves systems/<Name>/tech-plan.md for the current target repo.
+    # The agent calls this once at session start; the returned path is
+    # Read into context to inform expansion / scope decisions.
+    p_orch_tp = orch_sub.add_parser(
+        "tech-plan",
+        help="Resolve the tech plan path for the current target repo",
+    )
+    p_orch_tp.add_argument("--target-repo", default=".", metavar="PATH")
+    p_orch_tp.add_argument(
+        "--system", default="", metavar="NAME",
+        help="Override system name (directory under systems/) instead of "
+             "auto-resolving from repo-map.yaml + system.yaml entries.",
+    )
 
     # se orchestrator deploy [<id>] [--team T]
     p_orch_dep = orch_sub.add_parser(
@@ -2843,13 +3059,14 @@ def main() -> None:
     # Two-level dispatch for `orchestrator <sub>` (alias: `o`)
     if args.cmd in ("orchestrator", "o"):
         orch_table = {
-            "route":  cmd_orchestrator_route,
-            # NOTE: `pick` removed — call pick_ready.py / `grava ready` directly.
-            "doctor": cmd_orchestrator_doctor,
-            # NOTE: `expand` removed — use `deploy <epic-id>` instead.
-            "deploy": cmd_orchestrator_deploy,
-            "run":    cmd_orchestrator_run,
-            "pr-watch": cmd_orchestrator_pr_watch,
+            "route":     cmd_orchestrator_route,
+            "pick":      cmd_orchestrator_pick,
+            "doctor":    cmd_orchestrator_doctor,
+            "expand":    cmd_orchestrator_expand,
+            "tech-plan": cmd_orchestrator_tech_plan,
+            "deploy":    cmd_orchestrator_deploy,
+            "run":       cmd_orchestrator_run,
+            "pr-watch":  cmd_orchestrator_pr_watch,
         }
         if args.orch_cmd in orch_table:
             orch_table[args.orch_cmd](args)

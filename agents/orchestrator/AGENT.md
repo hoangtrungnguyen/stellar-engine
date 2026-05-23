@@ -48,11 +48,11 @@ All sub-commands accept `--target-repo PATH` (defaults to `.`).
 forms accept identical arguments. Examples below use the shorthand.
 
 ```
-se o route   <id>                        # classify team via grava type/labels
+se o route     <id>                      # classify team via grava type/labels
+se o pick      --team T [--limit N]      # list next ready issues (JSON)
+se o expand    <epic-id> [--dry-run]     # delegate epic → task-generator
+se o tech-plan                           # resolve systems/<Name>/tech-plan.md
 se o doctor                              # env + repo + cron checks
-# (Use `python3 agents/orchestrator/cli/pick_ready.py --team T --limit N`
-#  or `grava ready --json` to list ready issues — the `se o pick` shortcut
-#  was removed; deploy's --all batch loop still uses pick_ready internally.)
 
 # Composite "start orchestrator" entry. ALWAYS opens a tmux + Claude
 # Code session. `--repo NAME` is REQUIRED — deploy refuses to operate on
@@ -142,7 +142,7 @@ done
 ### With `<id>`
 
 ```bash
-ROUTE=$(python3 agents/orchestrator/cli/route.py "$ISSUE_ID" --target-repo "$REPO")
+ROUTE=$(se o route "$ISSUE_ID" --target-repo "$REPO")
 # → {"id": ..., "team": "fix-bug"|"epic-task"|"qa"|"task-generator", "type": ..., "labels": [...]}
 
 TEAM=$(echo "$ROUTE" | jq -r '.team')
@@ -159,7 +159,7 @@ TEAM=$(echo "$ROUTE" | jq -r '.team')
 
 ```bash
 # Pick next ready issue per team
-CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team "$TEAM" --target-repo "$REPO")
+CANDIDATES=$(se o pick --team "$TEAM" --target-repo "$REPO")
 # → [{"id": ..., "title": ..., "type": ...}]  (may be [])
 ```
 
@@ -183,12 +183,12 @@ in-scope/out-of-scope requirements for the current development phase.
 
 ```bash
 # Step 1: Resolve and load tech plan (once per session)
-PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN=$(se o tech-plan --target-repo "$REPO")
 PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
 # Agent: Read($PLAN_PATH)  ← load into context now
 
 # Step 2: Pick epics
-CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
+CANDIDATES=$(se o pick --team task-generator --target-repo "$REPO")
 
 # Step 3: Check out-of-scope requirements
 # For each candidate epic:
@@ -200,7 +200,7 @@ CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator
 #   - If uncertain or not mentioned → proceed (absence of mention is not exclusion)
 
 # Step 4: Expand
-python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"
+se o expand "$EPIC_ID" --target-repo "$REPO"
 # Tech plan is in context — use it to inform story/task decomposition
 ```
 
@@ -216,16 +216,16 @@ python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$RE
 
 ```bash
 # With explicit page_id:
-python3 agents/task-generator/cli/run.py "$PROJECT_ID" "$PAGE_ID" --dry-run
+se taskgen "$PROJECT_ID" "$PAGE_ID" --dry-run
 # → show preview to operator, await approval → Phase B → Phase C
 
 # Without page_id: auto-pick from epic backlog (runs session init first)
-PLAN=$(python3 agents/orchestrator/cli/tech_plan_load.py --target-repo "$REPO")
+PLAN=$(se o tech-plan --target-repo "$REPO")
 PLAN_PATH=$(echo "$PLAN" | jq -r '.tech_plan_path')
 # Agent: Read($PLAN_PATH)
-CANDIDATES=$(python3 agents/orchestrator/cli/pick_ready.py --team task-generator --target-repo "$REPO")
+CANDIDATES=$(se o pick --team task-generator --target-repo "$REPO")
 EPIC_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
-[ -n "$EPIC_ID" ] && python3 agents/orchestrator/cli/task_gen_expand.py "$EPIC_ID" --target-repo "$REPO"
+[ -n "$EPIC_ID" ] && se o expand "$EPIC_ID" --target-repo "$REPO"
 ```
 
 `/generate` is a convenience alias — `/deploy <epic-id>` routes identically through `route.py`.
@@ -237,7 +237,7 @@ EPIC_ID=$(echo "$CANDIDATES" | jq -r '.[0].id // empty')
 ### Phase 0: Claim
 
 ```bash
-python3 agents/orchestrator/cli/fix_bug_claim.py "$ID" --target-repo "$REPO"
+se o fix-bug claim "$ID" --target-repo "$REPO"
 # → {id, worktree, branch}
 # Sets: team=fix-bug, pipeline_phase=claimed, orchestrator_heartbeat
 ```
@@ -283,7 +283,7 @@ Steps:
 ```bash
 VERIFY_FLAGS=""
 [ "$SKIP_VERIFY" = "1" ] && VERIFY_FLAGS="--skip-verify"
-python3 agents/orchestrator/cli/fix_bug_verify.py "$ID" --target-repo "$REPO" $VERIFY_FLAGS
+se o fix-bug verify "$ID" --target-repo "$REPO" $VERIFY_FLAGS
 ```
 
 - **exit 0** → PASS (label `self-verified`, `pipeline_phase=coding_complete`). Proceed to Phase 3.
@@ -293,7 +293,7 @@ python3 agents/orchestrator/cli/fix_bug_verify.py "$ID" --target-repo "$REPO" $V
 ### Phase 3: Create PR
 
 ```bash
-python3 agents/orchestrator/cli/fix_bug_pr.py "$ID" --target-repo "$REPO"
+se o fix-bug pr "$ID" --target-repo "$REPO"
 # → {id, pr_url, pr_number}
 # Sets: pr_url, pr_number, pr_awaiting_merge_since, pipeline_phase=pr_created, label pr-created
 ```
@@ -325,7 +325,7 @@ pipeline. Phase 0 is CLI-driven; Phases 1–3 are agent-driven inside Claude Cod
 ### Phase 0: Claim + provision worktree
 
 ```bash
-python3 agents/orchestrator/cli/epic_task_claim.py "$ID" --target-repo "$REPO"
+se o epic-task claim "$ID" --target-repo "$REPO"
 # → JSON {id, worktree, branch, tech_plan_path|null}
 # Sets: pipeline_phase=claimed, team=epic-task, tech_plan_path (if found)
 # Provisions .worktree/<id>/ on branch grava/<id>
@@ -400,7 +400,7 @@ QA_FLAGS=""
 [ -n "$CHECKLIST" ] && QA_FLAGS="--checklist $CHECKLIST"
 [ -n "$TYPE" ]      && QA_FLAGS="--type $TYPE"
 
-python3 agents/orchestrator/cli/qa_load.py "$ID" --target-repo "$REPO" $QA_FLAGS
+se o qa load "$ID" --target-repo "$REPO" $QA_FLAGS
 # → {id, checklist_path, source, out: ".grava/qa-<id>-checklist.md"}
 ```
 
@@ -434,7 +434,7 @@ EOF
 ### Phase 2: Generate report
 
 ```bash
-python3 agents/orchestrator/cli/qa_report.py "$ID" \
+se o qa report "$ID" \
     --target-repo "$REPO" \
     --results-file "$REPO/.grava/qa-$ID-results.json"
 # → {id, verdict, report_path, fail_count, blocking}
@@ -449,7 +449,7 @@ python3 agents/orchestrator/cli/qa_report.py "$ID" \
 For epic-type issues with a `tg:src:<page_id>` label:
 
 ```bash
-python3 agents/orchestrator/cli/task_gen_expand.py "$ID" --target-repo "$REPO"
+se o expand "$ID" --target-repo "$REPO"
 # → resolves page_id + project_id → delegates to agents/task-generator/cli/run.py
 # Requires explicit operator approval BEFORE delegating (in addition to
 # task-generator's own Phase B/C approval gates).
@@ -458,10 +458,10 @@ python3 agents/orchestrator/cli/task_gen_expand.py "$ID" --target-repo "$REPO"
 For `/generate <page_id> --project <project_id>` (direct invocation):
 
 ```bash
-REPO=$(python3 agents/task-generator/cli/resolve_repo.py "$PROJECT_ID")
-WORK_DIR=$(python3 agents/task-generator/cli/init_run.py --target-repo "$REPO")
-python3 agents/task-generator/cli/run.py "$PROJECT_ID" "$PAGE_ID" --dry-run
+se taskgen "$PROJECT_ID" "$PAGE_ID" --dry-run
 # → show preview, await approval, then Phase B + C per task-generator AGENT.md
+# (repo resolution + work-dir init happens inside `se taskgen` — the operator
+#  doesn't run resolve_repo.py / init_run.py separately anymore.)
 ```
 
 ---
@@ -477,7 +477,7 @@ case "$PHASE" in
     ;;
   "coding_complete")
     # Re-enter at verify
-    python3 agents/orchestrator/cli/fix_bug_verify.py "$ID" --target-repo "$REPO"
+    se o fix-bug verify "$ID" --target-repo "$REPO"
     ;;
   "pr_created" | "pr_awaiting_merge")
     NEW=$(grava wisp read "$ID" pr_new_comments 2>/dev/null)
@@ -561,8 +561,8 @@ esac
 
 ## Tools Allowed
 
-- `Bash(python3 agents/orchestrator/cli/* *)` — all orchestrator scripts
-- `Bash(python3 agents/task-generator/cli/* *)` — task-generator delegation
+- `Bash(se o *)` — all orchestrator CLI wrappers (route / pick / expand / tech-plan / doctor / deploy / epic-task / fix-bug / qa / pr-watch / run)
+- `Bash(se taskgen *)` — task-generator delegation (formerly `python3 agents/task-generator/cli/run.py`)
 - `Bash(grava show|list|ready|wisp|label|comment|signal|commit|claim|close *)` — grava ops
 - `Bash(git push *)` — only from worktree, only after `fix_bug_verify.py` exit 0
 - `Bash(gh pr create *)` — only via `fix_bug_pr.py`
