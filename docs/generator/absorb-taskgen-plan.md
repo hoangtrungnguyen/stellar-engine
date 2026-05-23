@@ -111,8 +111,10 @@ One agent. Orchestrator dispatches each phase. Operator approval still required 
 | `agents/generator/cli/publish.py` | Upload `drafts/*.md` to a Plane project page (per-project, not workspace wiki). |
 | `agents/generator/cli/taskify.py` | Plane page → Plane work items + blocking relations. Wraps parser/planner/plane_writer. |
 | `agents/generator/cli/mirror.py` | After taskify: Plane → grava mirror. Wraps grava_writer. |
-| `agents/generator/cli/techplan.py` | Per-epic tech-plan markdown emitter. Merges with existing file (preserves `## Tech notes` block byte-for-byte). |
+| `agents/generator/cli/techplan.py` | Per-epic + per-story emitter. Merges with existing files (preserves engineer-owned blocks byte-for-byte). |
 | `agents/generator/cli/epic_tech_plan_load.py` | Read existing per-epic tech-plan (frontmatter + tech-notes block) for the merge step. |
+| `agents/generator/cli/story_spec_load.py` | Read existing per-story spec (frontmatter + all 5 section blocks). |
+| `agents/generator/description_composer.py` | Build Plane work item `description_html` from the four sections (Requirements / AC / Tech Plan / UI-UX). Used by `plane_writer` on every create. |
 | `agents/generator/plane_search.py` | Plane search wrapper (projects, pages, issues by query). Powers “search for Plane APIs” story. |
 | `agents/orchestrator/cli/generator_publish.py` | Bridge: `se o generate publish` → `generator/cli/publish.py`. |
 | `agents/orchestrator/cli/generator_taskify.py` | Bridge: `se o generate taskify` → `generator/cli/taskify.py`. Replaces `task_gen_expand.py`. |
@@ -216,6 +218,8 @@ systems/<SystemName>/business/tech-plan-<epic-slug>.md      ← ONE per epic
 
 One file per epic in the system. Filename slug derived from `epic.title` (kebab-case, lowercased, ascii-only). Emitted + updated by the generator on the `techplan` phase. **Distinct artifact** from the system-level free-form `tech-plan.md`.
 
+**Local only.** The generator must never upload this file to a Plane page or set it as a Plane work item's description. See §9 hard limits.
+
 #### Frontmatter schema
 
 ```yaml
@@ -270,16 +274,128 @@ schema_version: 1
 
 The bottom `## Tech notes` section is intentionally generator-empty; engineers edit it manually. Generator updates above-`## Tech notes` content on re-run, preserves the tech-notes block byte-for-byte.
 
-### 7.3 Load semantics — system-level vs per-epic
+### 7.3 Per-story spec file (new in v2)
 
-Two loaders, two call sites:
+```
+systems/<SystemName>/business/stories/<epic-slug>--<story-slug>.md   ← ONE per story
+```
+
+One file per story across the system. Filename joins epic-slug + story-slug (`--` separator) so two stories named `login` under different epics don't collide. Emitted + updated by the generator on the `techplan` phase alongside the per-epic file.
+
+**Local only.** Same hard limit as the per-epic file: never uploaded to a Plane page, never sent as a Plane work item description. Engineers own the body.
+
+#### Frontmatter schema
+
+```yaml
+---
+generator_source: <abs path to draft markdown that produced this epic>
+generator_run_id: <RID>
+plane_project_id: <uuid>
+plane_project_code: <e.g. CAPP, STELL>
+plane_page_id: <uuid of the spec page the epic was taskified from, if any>
+plane_epic_id: <uuid of the parent Plane epic work item>
+plane_issue_id: <uuid of the Plane story work item>
+plane_issue_sequence_id: <int — e.g. 153>
+grava_epic_id: <e.g. EPIC-12>
+grava_issue_id: <e.g. STORY-37>
+grava_repo_path: <abs path to target repo with .grava>
+epic_slug: <slug>
+story_slug: <slug>
+created_at: <ISO 8601>
+updated_at: <ISO 8601>
+schema_version: 1
+---
+```
+
+#### Body structure (five fixed sections, in order)
+
+```markdown
+# <Story title>
+
+> Epic: [<Epic title>](../tech-plan-<epic-slug>.md) · Plane: [<project_code>-<seq>](https://app.plane.so/...) · Grava: `<grava_issue_id>`
+
+## Requirements
+
+<the story description from outline.json — typically "As a … I want … so that …">
+
+## Acceptance Criteria
+
+- <bullet 1 from outline.json story.acceptance_criteria>
+- <bullet 2>
+- …
+
+## Tech Plan
+
+<generator-empty on create; engineer fills in implementation notes>
+
+## UI/UX Design
+
+- <link or short description from outline.json story.design_links>
+- …
+
+## QA Plan
+
+<generator-empty on create; engineer/QA fills in test scenarios, edge cases, fixtures>
+```
+
+**Section ownership**:
+
+| Section | Initial source | Re-run behaviour |
+|---|---|---|
+| `## Requirements` | `story.description_md` from outline | Generator overwrites (regenerated from latest outline) |
+| `## Acceptance Criteria` | `story.acceptance_criteria` list | Generator overwrites |
+| `## Tech Plan` | empty | **Generator preserves byte-for-byte** (engineer-owned) |
+| `## UI/UX Design` | `story.design_links` | Generator overwrites |
+| `## QA Plan` | empty | **Generator preserves byte-for-byte** (engineer-owned) |
+
+`## Tech Plan` and `## QA Plan` are the engineer/QA carve-outs (same pattern as `## Tech notes` on the per-epic file). Generator emits the header + a blank line on create; everything inside survives untouched on every subsequent run.
+
+### 7.4 Plane work item description composition
+
+When `taskify` creates a Plane work item (epic, story, or task), the generator composes `description_html` with **four** structured sections — NOT five. QA Plan is local-only and never reaches Plane.
+
+```html
+<h2>Requirements</h2>
+<p>… story.description_md, or epic.summary, or task title context …</p>
+
+<h2>Acceptance Criteria</h2>
+<ul><li>…</li><li>…</li></ul>
+
+<h2>Tech Plan</h2>
+<p><em>To be filled by the engineering team.</em></p>
+
+<h2>UI/UX Design</h2>
+<ul><li><a href="…">Label</a></li><li>short description …</li></ul>
+```
+
+**Per node kind**:
+
+| Section | Epic | Story | Task |
+|---|---|---|---|
+| Requirements | `epic.summary` if present, else empty placeholder | `story.description_md` | task title + parent story context if known |
+| Acceptance Criteria | aggregated from child stories (read-only summary) OR empty | story-level AC list verbatim | empty placeholder |
+| Tech Plan | empty placeholder | empty placeholder | empty placeholder |
+| UI/UX Design | aggregated from child stories OR empty | story-level design_links | empty placeholder |
+
+Empty sections render their `<h2>` header + a placeholder line (`<p><em>None.</em></p>`) so the structure is consistent across all Plane work items and easy to grep for downstream.
+
+**Critical**: the Plane description is the **only** Plane-side artifact for these sections. There is no link from the Plane work item back to the local per-story / per-epic markdown file. They are two parallel surfaces:
+
+- Engineers edit local md (with QA plan + tech plan) → not synced anywhere.
+- PMs/stakeholders read the Plane work item description → fixed at create time + manually updated thereafter.
+- Cross-ref: the local md frontmatter carries `plane_issue_id` (one-way lookup local → Plane). Plane has no link back to the local file.
+
+### 7.5 Load semantics — system-level vs per-epic vs per-story
+
+Three loaders, three call sites:
 
 | Loader | When | What it returns | Generator behaviour on miss |
 |---|---|---|---|
 | `tech_plan_load.py` (existing) | Once at the **start** of a generator run | `{system_name, tech_plan_path, exists}` JSON | Soft-fail. Run continues with no system-level context. Operator warned. |
-| `epic_tech_plan_load.py` (new in v2) | Once **per epic** during the `techplan` / `mirror` phase | `{epic_slug, tech_plan_path, exists, frontmatter, body}` JSON | Generator emits a fresh file with default body + frontmatter. |
+| `epic_tech_plan_load.py` (new in v2) | Once **per epic** during the `techplan` phase | `{epic_slug, tech_plan_path, exists, frontmatter, generator_body, tech_notes_block}` JSON | Generator emits a fresh file with default body + frontmatter. |
+| `story_spec_load.py` (new in v2) | Once **per story** during the `techplan` phase | `{epic_slug, story_slug, story_spec_path, exists, frontmatter, requirements, acceptance_criteria, tech_plan_block, ui_ux_block, qa_plan_block}` JSON | Generator emits a fresh file with the 5 sections. Engineer-owned blocks are empty. |
 
-Algorithm for the new per-epic loader:
+Algorithm for the per-epic loader:
 
 ```
 1. Inputs: --target-repo <path>, --system <Name>, --epic-slug <slug>
@@ -296,20 +412,58 @@ Algorithm for the new per-epic loader:
 6. Exit 0 either way (existence is a flag, not an error).
 ```
 
-### 7.4 Write semantics — per-epic merge rules
+Algorithm for the per-story loader (`story_spec_load.py`):
 
-On the `techplan` phase, for each epic:
+```
+1. Inputs: --target-repo <path>, --system <Name>, --epic-slug <slug>, --story-slug <slug>
+2. Resolve stellar root via walk-up.
+3. Build path = stellar_root / "systems" / <Name> / "business" / "stories" /
+                "<epic-slug>--<story-slug>.md"
+4. If exists:
+     a. Parse YAML frontmatter.
+     b. Slice body by H2 headers in fixed order:
+        - "## Requirements"        → generator-managed
+        - "## Acceptance Criteria" → generator-managed
+        - "## Tech Plan"           → engineer-owned (preserve byte-for-byte)
+        - "## UI/UX Design"        → generator-managed
+        - "## QA Plan"             → engineer-owned (preserve byte-for-byte)
+     c. Return all 5 blocks + frontmatter.
+5. If not: return {exists: false, story_spec_path}.
+6. Exit 0 either way.
+```
 
-1. Call `epic_tech_plan_load.py`. Get `{exists, tech_plan_path, frontmatter, tech_notes_block}`.
+### 7.6 Write semantics — merge rules
+
+On the `techplan` phase, the generator writes **two** files per story (one per-epic shared by all stories of that epic, one per-story).
+
+**Per-epic file** (`tech-plan-<epic-slug>.md`):
+
+1. Call `epic_tech_plan_load.py`. Get `{exists, frontmatter, generator_body, tech_notes_block}`.
 2. Build new content:
-   - **Frontmatter**: merge — preserve `created_at` if existing; always rewrite `updated_at`, all `plane_*` and `grava_*` IDs (these are the authoritative source); bump `schema_version` only if generator’s schema literally changed.
-   - **Body above `## Tech notes`**: regenerate from outline + post-taskify + post-mirror state. Overwrite.
-   - **Body from `## Tech notes` onward**: copied byte-for-byte from `tech_notes_block`. If the file did not previously exist, emit `## Tech notes\n\n` as the empty header (engineer fills it later).
+   - **Frontmatter**: preserve `created_at` if existing; always rewrite `updated_at` + all `plane_*` / `grava_*` IDs.
+   - **Body above `## Tech notes`**: regenerate from outline + post-taskify state. Overwrite.
+   - **Body from `## Tech notes` onward**: copy from `tech_notes_block` byte-for-byte. If new, emit `## Tech notes\n\n`.
 3. Write atomically (tmp + rename).
 
-This is the only file the generator writes inside `systems/<N>/`. Everything else under `systems/<N>/` (including the free-form `tech-plan.md`) is operator-owned.
+**Per-story file** (`stories/<epic-slug>--<story-slug>.md`):
 
-### 7.5 Authoring guide
+1. Call `story_spec_load.py`. Get `{exists, frontmatter, requirements, acceptance_criteria, tech_plan_block, ui_ux_block, qa_plan_block}`.
+2. Build new content (sections in fixed order):
+   - **Frontmatter**: preserve `created_at`; always rewrite `updated_at` + all `plane_*` / `grava_*` / `epic_slug` / `story_slug` keys.
+   - **`## Requirements`**: regenerate from `story.description_md`. Overwrite.
+   - **`## Acceptance Criteria`**: regenerate from `story.acceptance_criteria`. Overwrite.
+   - **`## Tech Plan`**: copy `tech_plan_block` byte-for-byte. If new, emit header + blank line.
+   - **`## UI/UX Design`**: regenerate from `story.design_links`. Overwrite.
+   - **`## QA Plan`**: copy `qa_plan_block` byte-for-byte. If new, emit header + blank line.
+3. Write atomically.
+
+These are the only files the generator writes inside `systems/<N>/`. Everything else under `systems/<N>/` (including the free-form system-level `tech-plan.md`) is operator-owned.
+
+**Plane work item description** (separate write surface, not a file):
+
+On `taskify` create, build `description_html` per §7.4 composition table. On idempotent re-run (reconcile path), generator does NOT touch existing `description_html` unless explicitly invoked with `--rewrite-plane-descriptions` (off by default) — Plane is treated as engineer-mutable after create.
+
+### 7.7 Authoring guide
 
 Lives at `docs/generator/tech-plan-format.md` (created in this branch). Covers field semantics, link resolution rules, what happens on epic rename, how to query all tech-plans for a system, and explicit guidance on the system-level vs per-epic split — when to write in each.
 
@@ -389,7 +543,10 @@ The generator’s `AGENT.md` `Hard limits` section becomes:
 - **NEVER auto-promote a draft into `systems/<Name>/business/`** without operator approval this turn.
 - **NEVER bypass per-phase approval gates.** Each write phase requires explicit `--yes` and a passing dry-run preview.
 - **NEVER commit `drafts/`** (gitignored).
-- **NEVER overwrite a `## Tech notes` block** in an existing tech-plan markdown file.
+- **NEVER overwrite a `## Tech notes` block** on a per-epic tech-plan file. Always copy byte-for-byte from the loaded existing file.
+- **NEVER overwrite a `## Tech Plan` or `## QA Plan` block** on a per-story spec file. Same byte-for-byte rule.
+- **NEVER sync local per-epic / per-story md files to Plane.** The `publish` phase explicitly refuses any path under `systems/<N>/business/tech-plan-*.md` or `systems/<N>/business/stories/`. These artifacts are local-only by design; the Plane work item description (composed at create via `description_composer.py`) is the only Plane-side surface. Code-enforced via a deny-list in `publish.py`.
+- **NEVER include `## QA Plan` content in a Plane work item description.** QA plan is local-only. The `description_composer.py` rejects QA fields from the input dict.
 
 Removed limits (were on the old generator):
 - ~~NEVER call Plane API~~
@@ -423,6 +580,10 @@ Removed limits (were on the old generator):
 2. **Where does `se taskify` (or `se o generate taskify`) emit its preview file today?** Current task-generator writes to `runs/preview/<RID>/*.preview.md`. Keep that path or move under `drafts/<project>/runs/<RID>/`? Recommendation: keep path; just relocate code.
 3. ~~**Per-epic tech-plan vs single-file tech-plan-index?**~~ **Resolved 2026-05-23:** both. System-level free-form `tech-plan.md` (existing) stays as session-context loader. New per-epic `tech-plan-<slug>.md` files added under `systems/<N>/business/`. See §7.
 4. **`schema_version` start value** — `1` chosen. Future migration story: when frontmatter shape changes, bump version + add a migration script. OK to ship at v1?
+5. **Per-story file path layout.** Plan chose flat `systems/<N>/business/stories/<epic-slug>--<story-slug>.md` to avoid renaming when epic moves. Alternative: nested `systems/<N>/business/<epic-slug>/<story-slug>.md`. Recommendation: flat. Confirm.
+6. **Story slug collision on rename.** When an epic is renamed (epic-slug changes), existing per-story files become orphaned by filename. Options: (a) loader treats `plane_issue_id` as the primary key and rewrites filenames on mismatch; (b) operator runs a one-off `se o generate rename-epic` to migrate. Recommendation: (a) — generator self-heals via the Plane ID. Confirm.
+7. **Plane "Tech Plan" section at create time.** Per §7.4 it renders as a placeholder (`<em>To be filled by the engineering team.</em>`). Alternative: pull current `## Tech notes` block from the per-epic file (if it exists at create time). Recommendation: placeholder. Engineers update Plane manually; local tech plan stays the source of truth. Confirm.
+8. **Re-running `taskify` against a Plane work item that already exists.** The reconcile phase (carried over from current task-generator) updates title + description by default. With structured sections in Plane now, should reconcile rewrite the entire description, or only the `## Requirements` + `## Acceptance Criteria` + `## UI/UX Design` sections (leaving `## Tech Plan` untouched since engineers may have edited it)? Recommendation: leave `## Tech Plan` untouched; reconcile only sync-from-outline-able sections. Confirm.
 
 ---
 
