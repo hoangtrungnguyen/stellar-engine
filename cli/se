@@ -2525,17 +2525,45 @@ def cmd_orchestrator_deploy(args: argparse.Namespace) -> None:
         # Reuse the running session — queue new commands without
         # restarting Claude (preserves context, in-flight worktrees,
         # wisp state).
-        print(f"Session '{session_name}' already running — queueing "
-              f"{len(slash_cmds)} command(s).")
+        #
+        # CRITICAL: do NOT open a new GUI terminal window here. The
+        # operator already has a terminal attached to this session
+        # (from the original `se o deploy`). Spawning another window
+        # would litter the desktop with duplicates of the same Claude
+        # process. Instead:
+        #   1. Send the slash commands into the existing session.
+        #   2. Flash a tmux display-message in that session so any
+        #      attached viewer sees the new commands queued.
+        #   3. Print a clear notice in the stellar-engine shell that
+        #      the existing terminal was reused (no new window).
+        # `--attach` is honoured only if the operator explicitly asked
+        # — default is silent re-queue.
+        print(f"Session '{session_name}' already running — "
+              f"reusing existing terminal.")
         print(f"  Repo:    {args.repo} → {target_repo}")
         print(f"  Team:    {team} → {skill}")
+        print(f"  Queued ({len(slash_cmds)}):")
         for cmd in slash_cmds:
-            print(f"  Sending: {cmd}")
+            print(f"    {cmd}")
         _send_all_slash_cmds()
-        if attach:
-            _switch_or_attach()
-        else:
-            print(f"  Attach:  tmux attach -t {session_name}")
+
+        # Surface the queue inside the existing tmux session so an
+        # attached viewer sees a one-line banner. Best-effort — tmux
+        # display-message failures are non-fatal.
+        banner = f"se o deploy: queued {len(slash_cmds)} {skill} command(s)"
+        subprocess.run(
+            ["tmux", "display-message", "-t", session_name, banner],
+            capture_output=True,
+        )
+
+        # NEVER auto-attach in re-run. The operator already has a
+        # terminal attached from the original invocation; auto-spawning
+        # another window on every re-deploy is the duplicate-window bug
+        # this change fixes. If they want a second viewer, the printed
+        # `tmux attach -t <name>` line tells them exactly how.
+        print(f"  View:    tmux attach -t {session_name}")
+        print(f"           (no new window opened — existing one still "
+              f"attached)")
         return
 
     # 6. New session: create detached, start claude, wait, send command(s).
