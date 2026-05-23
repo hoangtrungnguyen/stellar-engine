@@ -37,7 +37,13 @@ TERMINAL_PHASES = {"", "complete", "failed"}
 
 TYPE_FILTER: dict[str, set[str]] = {
     "fix-bug":        {"bug"},
-    "epic-task":      {"task", "story", "subtask"},
+    # Stories are excluded: they're work-containers (parent of subtasks),
+    # not work items. /ship rejects stories ("/ship targets leaf issues").
+    # If a story is on the ready queue with subtasks under it, grava ready
+    # also returns those subtasks — they get picked instead. Stories with
+    # no subtasks are a spec gap; operator should decompose via /generate
+    # before dispatching to epic-task.
+    "epic-task":      {"task", "subtask"},
     "task-generator": {"epic"},
 }
 
@@ -54,6 +60,32 @@ def is_available(issue_id: str, cwd: str) -> bool:
     """True if issue is not already claimed by a pipeline."""
     phase = wisp_read(issue_id, "pipeline_phase", cwd)
     return phase in TERMINAL_PHASES
+
+
+def has_open_blockers(issue_id: str, cwd: str) -> bool:
+    """True if `grava blocked <id> --json` returns any active blockers.
+
+    `grava ready` does NOT consult dep-edge blockers reliably (observed
+    2026-05: returns issues blocked by an in_progress upstream). Per-candidate
+    `grava blocked` call is the canonical check — same source /ship's
+    `scripts/ship/dep-check.sh` uses for its precondition gate. Without this
+    filter, pick_ready hands /ship issues that immediately PIPELINE_HALT.
+    """
+    r = subprocess.run(
+        ["grava", "blocked", issue_id, "--json"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if r.returncode != 0:
+        # Fail-open: if `grava blocked` errored, don't pre-filter — let
+        # /ship's own dep-check.sh decide. Matches the existing behaviour
+        # where pick_ready trusts grava's data and surfaces errors via
+        # downstream tooling.
+        return False
+    try:
+        blockers = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return False
+    return bool(blockers)
 
 
 def _id(node: dict) -> str:
@@ -103,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         # grava list returns lowercase shape
         for item in items:
             iid = item.get("id", "")
-            if iid and is_available(iid, cwd):
+            if iid and is_available(iid, cwd) and not has_open_blockers(iid, cwd):
                 results.append({"id": iid, "title": item.get("title", ""), "type": item.get("type", "")})
                 if len(results) >= args.limit:
                     break
@@ -158,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not any(lb.startswith("tg:src:") for lb in full_labels):
                     continue
 
-            if iid and is_available(iid, cwd):
+            if iid and is_available(iid, cwd) and not has_open_blockers(iid, cwd):
                 results.append({"id": iid, "title": ititle, "type": itype})
                 if len(results) >= args.limit:
                     break

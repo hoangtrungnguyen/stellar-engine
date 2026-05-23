@@ -36,14 +36,51 @@ import sys
 from pathlib import Path
 
 
-def find_stellar_root(start: Path) -> Path:
-    """Walk up from start until repo-map.yaml found."""
+def find_stellar_root(start: Path, target_repo: Path | None = None) -> Path:
+    """Resolve the stellar-engine workspace root.
+
+    Resolution order:
+      1. Walk up from `start` until a dir containing `repo-map.yaml` is found.
+         Works when called from a source checkout (start = __file__'s dir).
+      2. If `target_repo` is given, read `<target_repo>/.grava/stellar-engine-root`
+         — `se repos add` writes the absolute path there at registration time.
+         This is the path used when running from the PyInstaller binary, where
+         `start` is a temp _MEI* dir with no `repo-map.yaml` ancestor.
+      3. Read $STELLAR_ENGINE_HOME (legacy; will be removed once #2 ships
+         everywhere — see docs/orchestrator/daemon-plan.md D8).
+
+    Raises FileNotFoundError with operator guidance if all three fail.
+    """
+    # Step 1 — walk up from start
     current = start.resolve()
     while current != current.parent:
         if (current / "repo-map.yaml").exists():
             return current
         current = current.parent
-    raise FileNotFoundError(f"repo-map.yaml not found walking up from {start}")
+
+    # Step 2 — pointer file in target repo (.grava/stellar-engine-root)
+    if target_repo is not None:
+        pointer = target_repo.resolve() / ".grava" / "stellar-engine-root"
+        if pointer.exists():
+            root = Path(pointer.read_text().strip()).expanduser()
+            if root.is_dir() and (root / "repo-map.yaml").exists():
+                return root
+
+    # Step 3 — legacy env var
+    env_root = os.environ.get("STELLAR_ENGINE_HOME", "").strip()
+    if env_root:
+        root = Path(env_root).expanduser()
+        if root.is_dir() and (root / "repo-map.yaml").exists():
+            return root
+
+    raise FileNotFoundError(
+        "Could not resolve stellar-engine workspace. Tried:\n"
+        f"  • walking up from {start}\n"
+        f"  • <target_repo>/.grava/stellar-engine-root pointer file\n"
+        f"  • $STELLAR_ENGINE_HOME env var\n"
+        "Fix: re-run `se repos add --path <target-repo> --force` from your "
+        "stellar-engine workspace dir, which writes the pointer file."
+    )
 
 
 def _load_yaml_safe(yaml_path: Path) -> dict:
@@ -159,9 +196,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # 1. Find stellar root
+    # 1. Find stellar root. Pass --target-repo so the resolver can read the
+    #    pointer file (<target>/.grava/stellar-engine-root) when the source-walk
+    #    fails (PyInstaller binary case — __file__ lives in a temp _MEI* dir).
     try:
-        stellar_root = find_stellar_root(Path(__file__).parent)
+        stellar_root = find_stellar_root(
+            Path(__file__).parent,
+            target_repo=Path(args.target_repo) if args.target_repo else None,
+        )
     except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
