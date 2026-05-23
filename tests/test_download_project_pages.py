@@ -4,8 +4,8 @@ single-page download path.
 End-to-end coverage of the network paths is intentionally avoided here;
 those run against the Plane sandbox via the smoke tests documented in
 docs/install.md. These tests pin the pure logic so future refactors
-don't silently break the `CAPP → UUID` resolution that `se generate
---plane-project CAPP` depends on.
+don't silently break the `CAPP → UUID` resolution that
+`agents/generator/cli/run.py --plane-project CAPP` depends on.
 """
 
 from __future__ import annotations
@@ -126,7 +126,8 @@ def test_resolve_falls_back_when_listing_unreachable(monkeypatch, dpp, cfg):
 def test_download_single_page_dry_run_returns_path(tmp_path, dpp, cfg):
     """Dry-run does not call the API, does not write the file, but
     still returns a deterministic path so callers can chain it (the
-    `se generate` Plane-source flow relies on this contract)."""
+    `agents/generator/cli/run.py` Plane-source flow relies on this
+    contract)."""
     out = dpp.download_single_page(
         cfg,
         project_uuid="11111111-1111-1111-1111-111111111111",

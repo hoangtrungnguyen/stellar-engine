@@ -21,7 +21,7 @@ PyInstaller `--onefile` pulls the entry script ([`cli/se`](../cli/se)) plus ever
 - Third-party deps: `pyyaml`, `markdown`, `markdownify`, `requests`.
 - The whole [`agents/`](../agents) tree, the Plane sync scripts (`upload_project_pages.py`, `download_project_pages.py`, `upload_wiki_page.py`).
 
-At runtime the entrypoint resolves data files via `sys._MEIPASS`, so subcommands like `se generate` import the generator agent directly — no subprocess shell-out.
+At runtime the entrypoint resolves data files via `sys._MEIPASS`, so subcommands like `se taskgen` and `se download` import their respective agents in-process — no subprocess shell-out. The generator agent (`agents/generator/cli/run.py`) is invoked directly when the operator needs it (no `se generate` wrapper).
 
 ## Local build
 
@@ -198,7 +198,7 @@ def cmd_foo(args: argparse.Namespace) -> None:
 bash scripts/build.sh
 ./dist/se-darwin-arm64/se --help
 ./dist/se-darwin-arm64/se doctor --dir .
-./dist/se-darwin-arm64/se generate path/to/sample.md --project DEMO --no-llm
+python3 agents/generator/cli/run.py path/to/sample.md --project DEMO --no-llm
 ```
 
 A green `doctor` (with the expected `anthropic`/`pymupdf` warnings) and a populated `drafts/DEMO/runs/<RID>/extract.json` confirm the bundle is wired correctly.

@@ -120,10 +120,11 @@ def test_check_generator_full_stack(tmp_path, se):
         assert "Phase D" in by_name["python: anthropic"].detail
     assert by_name["python: pymupdf"].status in {"ok", "warn"}
 
-    # drafts/ absent → warn, with helpful hint.
+    # drafts/ absent → warn, with helpful hint pointing at the generator
+    # entry script (the old `se generate` wrapper was removed).
     drafts_check = by_name["generator: drafts/"]
     assert drafts_check.status == "warn"
-    assert "se generate" in drafts_check.detail
+    assert "agents/generator/cli/run.py" in drafts_check.detail
 
 
 def test_check_generator_with_drafts_dir(tmp_path, se):

@@ -1,7 +1,11 @@
 """run — one-shot orchestrator chaining init_run → extract → outline → render.
 
-Operator-facing entry is `se generate <source> --project <name>`, which
-shells into this module. Direct invocation is supported too.
+This module is the canonical operator entry point:
+    python3 agents/generator/cli/run.py <source> --project <NAME>
+
+The previous `se generate` wrapper has been removed; invoke this script
+directly. Inside Claude Code, the generator subagent
+(`.claude/agents/generator.md`) still drives the full chain end-to-end.
 
 Default mode is offline: extract.json is produced and the chain stops at
 `outline` until either (a) `--llm` is passed (Phase D, deferred) or (b)
