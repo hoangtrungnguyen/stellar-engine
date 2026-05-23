@@ -13,7 +13,8 @@ Subcommands:
   download     Pull Plane project pages to systems/<workspace>/<project>/
   generate     Run the generator chain (extract → outline → render)
   taskgen      Plane spec page → Plane epics/stories/tasks + Grava mirror
-  plane-sync   Sync a Grava issue → Plane (status / assignee / comments)
+  plane-sync   Bidirectional state sync between Grava ⇄ Plane (default --direction pull;
+               see docs/cli/se-plane-sync.md for modes, flags, and limits)
   orchestrator run
                Long-running fleet daemon (D0 scaffold — stub today;
                tick loop lands in D1, pr-watcher absorption in D6).
@@ -3069,7 +3070,12 @@ def main() -> None:
 
     p_sync = sub.add_parser(
         "plane-sync",
-        help="Sync a Grava issue's status/assignee/comments to its linked Plane work item",
+        help=(
+            "Bidirectional state sync between a local Grava repo and a Plane "
+            "project. Default --direction pull (Plane → Grava, create missing "
+            "mirrors). push: Grava → Plane (called by .grava/hooks/plane-sync.sh). "
+            "both: pull then push. Full reference: docs/cli/se-plane-sync.md."
+        ),
     )
     p_sync.add_argument("issue_id", nargs="?", default=None,
                         help="Grava issue id (e.g. grava-0305). Omit to scan all plane-linked issues.")

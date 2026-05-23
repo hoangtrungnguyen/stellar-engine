@@ -2,6 +2,8 @@
 
 This guide configures the environment so that Grava agents (coder, reviewer, pr-creator) can locate and invoke `grava_plane_sync.py` after each `grava signal`.
 
+> **Looking for the command reference (flags, modes, exit codes)?** See [`docs/cli/se-plane-sync.md`](cli/se-plane-sync.md). This page covers operator setup only.
+
 ## What `STELLAR_ENGINE_HOME` is
 
 A shell environment variable holding the **absolute path to your local stellar-engine checkout**.

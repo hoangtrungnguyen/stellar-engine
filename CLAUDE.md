@@ -65,12 +65,11 @@ python3 cli/se download CAPP --page-id <uuid>      # fetch only one page (skips 
 python3 cli/se download CAPP --page-name "Foo"     # fetch by exact name (case-sensitive); exit 2 on duplicate
 # Full reference: docs/cli/se-download.md
 python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
-    [--system-yaml ... --state-file ... --log-level ... --direction {push,pull,both}]
-                                                   # default pull: import all Plane work items as new grava issues
-                                                   # push: grava → Plane (status / assignee / comments)
-                                                   # both: pull then push
-                                                   # NOTE: raw `python3 grava_plane_sync.py` still defaults to push
-                                                   # (agent hooks rely on this).
+    [--direction {push,pull,both}] [--state-file ... --system-yaml ... --log-level ...]
+                                                   # default --direction pull: Plane → Grava (creates missing local mirrors)
+                                                   # --direction push: Grava → Plane (called by .grava/hooks/plane-sync.sh after every `grava signal`)
+                                                   # --direction both: pull, then push
+# Full reference: docs/cli/se-plane-sync.md
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
 # The `se generate` wrapper was removed — call the generator script directly.
@@ -152,6 +151,7 @@ To run it manually outside the daemon (parity testing, ad-hoc): `se orchestrator
 | [`docs/ship-bug/strategy.md`](docs/ship-bug/strategy.md) | `/ship-bugfix` (fix-bug team) pipeline design |
 | [`docs/ship-bug/plan.md`](docs/ship-bug/plan.md) | Concrete steps to formalize fix-bug as a standalone skill |
 | [`docs/grava-plane-status-sync-plan.md`](docs/grava-plane-status-sync-plan.md) | v0 (shipped) + v0.1 outline for grava → Plane sync |
+| [`docs/cli/se-plane-sync.md`](docs/cli/se-plane-sync.md) | `se plane-sync` full reference — modes, flags, state map, exit codes |
 | [`docs/grava-plane-sync-setup.md`](docs/grava-plane-sync-setup.md) | Operator setup: `STELLAR_ENGINE_HOME`, shell profile, verification |
 | [`docs/self-host/self-host-plane-plan.md`](docs/self-host/self-host-plane-plan.md) | Plan for running Plane locally |
 | [`agents/generator/README.md`](agents/generator/README.md) | Generator agent — quick reference + operator walkthrough |

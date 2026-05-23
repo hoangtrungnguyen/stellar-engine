@@ -70,8 +70,8 @@ The fleet-level runtime (`se` CLI, per-repo tmux orchestrators, `repos.yaml`) is
 | Plane sync utilities | `upload_project_pages.py`, `upload_wiki_page.py` | Shipping | Push local markdown → Plane project pages / workspace wiki. State persisted in `.plane-pages.json` / `.plane-workspace-pages.json`. |
 | Setup script | `setup.sh` | Shipping | Install `@aaronshaf/plane` CLI via bun + Python deps; save credentials to `~/.config/plane/config.json`. |
 | MCP wiring | `mcp-setup.md` | Doc | Instructions for connecting Plane MCP server to Claude Code session. |
-| Grava → Plane sync v0 | `agents/task-generator/cli/grava_plane_sync.py` + grava agent hooks | Shipped (PR #1, grava PR #66) | Per-agent-hook approach. Coder / reviewer / pr-creator invoke the helper after every `grava signal`. Non-fatal (`\|\| true`). State map per system. |
-| Operator setup guide | `docs/grava-plane-sync-setup.md` | Shipped | `STELLAR_ENGINE_HOME` env var setup, shell-profile snippets, verification. |
+| Grava ⇄ Plane state sync | `agents/task-generator/cli/grava_plane_sync.py` (wrapped by `se plane-sync`) + grava agent hooks | Shipped (PR #1, grava PR #66) | Bidirectional: `--direction push` (grava → Plane, called by `.grava/hooks/plane-sync.sh` after each `grava signal`, non-fatal) and `--direction pull` (Plane → Grava, create-only for un-linked items). State map per system. Full reference: `docs/cli/se-plane-sync.md`. |
+| Operator setup guide | `docs/grava-plane-sync-setup.md` | Shipped | `STELLAR_ENGINE_HOME` env var setup, shell-profile snippets, verification. Command reference moved to `docs/cli/se-plane-sync.md`. |
 | System spec template | `systems/SportBuddies/` | Reference | Sample showing the expected layout: `business/`, `design/`, `customer_app/`, `owner_dashboard/`, `backend_core/`, `a2a/`, `web_intro/`. |
 
 ### 3.2 Planned (roadmap)
