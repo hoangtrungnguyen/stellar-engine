@@ -109,6 +109,11 @@ se doctor --dir .                             # validate environment
 # no `se generate` wrapper. Inside Claude Code use the generator subagent.
 python3 agents/generator/cli/run.py path/to/spec.md --project DEMO --no-llm
 python3 agents/generator/cli/run.py --plane-project CAPP --plane-page <page-uuid> --project DEMO --no-llm
+se projects list                              # workspace projects (table: IDENTIFIER, NAME, ID)
+se projects show CAPP                         # one project's details
+se projects members CAPP                      # project members table
+se projects states CAPP                       # project workflow states (Backlog → Cancelled)
+# Full reference: docs/cli/se-projects.md
 se download <plane-project-uuid>              # pull all Plane pages → systems/
 se download CAPP --page-id <page-uuid>        # single page; project code resolves via API
 se download CAPP --page-name "Architecture"   # single page by name (case-sensitive)
