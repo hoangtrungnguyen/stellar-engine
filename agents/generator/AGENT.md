@@ -18,22 +18,26 @@ Sub-agent that converts one markdown source file into reviewable spec drafts. Th
 
 ## Operator entry point
 
+The generator is invoked directly via `cli/run.py`. The previous
+`se generate` wrapper was removed — operators (and this AGENT) call
+the script directly. `--project <NAME>` is required.
+
 ```bash
-se generate <source.md>                       # default: offline, stops after extract
-se generate <source.md> --dry-run             # same as default; extract only, no render
-se generate <source.md> --no-llm              # explicit offline; extract only
-se generate <source.md> --llm                 # Phase D — currently refused with pointer
-se generate <source.md> --step extract        # single-step
-se generate <source.md> --step outline        # no-op today (LLM deferred)
-se generate <source.md> --step render         # render only, requires outline.json
-se generate <source.md> --system-name "Foo"   # override H1
-se generate <source.md> --run-id RID-1        # override timestamp run id
-se generate <source.md> --project FOO         # override drafts namespace + H1
-se generate --plane-project CAPP --plane-page <uuid>
-                                              # source from a Plane page; drafts namespace = CAPP
+python3 agents/generator/cli/run.py <source.md> --project NAME                       # default: offline, stops after extract
+python3 agents/generator/cli/run.py <source.md> --project NAME --dry-run             # same as default; extract only, no render
+python3 agents/generator/cli/run.py <source.md> --project NAME --no-llm              # explicit offline; extract only
+python3 agents/generator/cli/run.py <source.md> --project NAME --llm                 # Phase D — currently refused with pointer
+python3 agents/generator/cli/run.py <source.md> --project NAME --step extract        # single-step
+python3 agents/generator/cli/run.py <source.md> --project NAME --step outline        # no-op today (LLM deferred)
+python3 agents/generator/cli/run.py <source.md> --project NAME --step render         # render only, requires outline.json
+python3 agents/generator/cli/run.py <source.md> --project NAME --system-name "Foo"   # override H1
+python3 agents/generator/cli/run.py <source.md> --project NAME --run-id RID-1        # override timestamp run id
+python3 agents/generator/cli/run.py --plane-project CAPP --plane-page <uuid> --project CAPP
+                                                                                     # source from a Plane page; downloaded to
+                                                                                     # systems/<workspace>/CAPP/<slug>.md first
 ```
 
-`cli/run.py` is the internal one-shot orchestrator; `se generate` wraps it. Both accept the same flags.
+`cli/run.py` is the canonical entry point. There is no `se generate` wrapper anymore.
 
 ## Three-step pipeline
 
@@ -158,7 +162,7 @@ undetected, so review the rendered draft before promoting.
 
 `--llm` will fail loudly with `LLMNotEnabled` until Phase D lands. The interim outline path is manual via a Claude Code session:
 
-1. Run `se generate <source.md> --no-llm` (or `--dry-run`) — writes `extract.json`. (Pass `--project <name>` to override the drafts namespace if the filename stem isn't what you want.)
+1. Run `python3 agents/generator/cli/run.py <source.md> --project <NAME> --no-llm` (or `--dry-run`) — writes `extract.json`. `--project` is required.
 2. In a Claude Code session, paste the contents of `extract.json` and ask Claude to produce an `outline.json` matching the schema in [docs/generator/plan.md §D2](../../docs/archive/generator/plan.md). Required keys: `epics[].title`, `epics[].stories[].title`, `epics[].stories[].acceptance_criteria`, `confidence`. Optional: `epics[].summary`, `epics[].depends_on` (folded from `extract.json` `epic_dependencies` — see [Epic dependencies](#epic-dependencies) above), `epics[].design_links`, `epics[].stories[].depends_on`, `epics[].stories[].tasks`.
 3. Save the produced `outline.json` into `drafts/<project>/runs/<RID>/outline.json`.
 4. Re-run with `--step render` (or rerun the full chain; the orchestrator picks up the existing `outline.json`).
@@ -177,7 +181,7 @@ Diff-on-re-run is computed automatically when a prior run for the same source ex
 
 ## Tools allowed
 
-- `Bash(python3 agents/generator/cli/* *)` and `Bash(python3 cli/se generate *)` — invoke the generator chain.
+- `Bash(python3 agents/generator/cli/* *)` — invoke the generator chain.
 - `Read(*)` — open `extract.json`, `outline.json`, `manifest.json`, `diff.json`, or emitted drafts under `drafts/<project>/runs/<RID>/`.
 
 Anything else (writes outside the run directory, network calls, grava / Plane CLI) requires explicit operator confirmation.

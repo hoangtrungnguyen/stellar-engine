@@ -1560,7 +1560,8 @@ def _check_generator(base: Path) -> list[Check]:
     else:
         checks.append(Check(
             "generator: drafts/", "warn",
-            f"{drafts} not present — created on first `se generate` run",
+            f"{drafts} not present — created on the first "
+            f"`python3 agents/generator/cli/run.py` invocation",
         ))
 
     return checks
@@ -1783,106 +1784,26 @@ def cmd_pages(args: argparse.Namespace) -> None:
     sys.exit(0)
 
 
-def _resolve_plane_source(args: argparse.Namespace) -> tuple[str, str | None]:
-    """When --plane-project + --plane-page are set, download the page
-    and return `(local_markdown_path, project_code)`. Otherwise return
-    `(args.source, None)`.
-
-    The returned `project_code` is the Plane short identifier (e.g.
-    "CAPP"); the caller may use it to default the drafts namespace
-    (`args.project`) when the operator didn't pass `--project`.
-
-    Validates flag combinations and exits with a clear message on
-    misuse before invoking the generator pipeline.
-    """
-    has_plane = bool(args.plane_project) and bool(args.plane_page)
-    has_any_plane = bool(args.plane_project) or bool(args.plane_page)
-    if has_any_plane and not has_plane:
-        print(
-            "ERROR: --plane-project and --plane-page must be used together.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if args.source and has_plane:
-        print(
-            "ERROR: pass either a local source path OR "
-            "--plane-project + --plane-page, not both.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not args.source and not has_plane:
-        print(
-            "ERROR: need a source — pass a markdown path or "
-            "--plane-project <code> --plane-page <uuid>.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not has_plane:
-        return args.source, None
-
-    # Plane mode — fetch the single page via download_project_pages.
-    script = _repo_root() / "download_project_pages.py"
-    if not script.exists():
-        print(f"ERROR: {script} not found", file=sys.stderr)
-        sys.exit(1)
-    dl = _load_module("download_project_pages", script)
-    cfg = dl.load_config()
-    project_uuid, project_code = dl.resolve_project(cfg, args.plane_project)
-    out_path = dl.download_single_page(
-        cfg, project_uuid, project_code, args.plane_page,
-        output_root="systems",
-    )
-    return str(out_path), project_code
-
-
 # ── se generate ───────────────────────────────────────────────────────────────
-
-
-def cmd_generate(args: argparse.Namespace) -> None:
-    """Invoke agents/generator/cli/run.main directly."""
-    agents_dir = _repo_root() / "agents"
-    script = agents_dir / "generator" / "cli" / "run.py"
-    if not script.exists():
-        print(f"ERROR: {script} not found", file=sys.stderr)
-        sys.exit(1)
-
-    # generator/cli/run.py expects `agents/` on sys.path so its lazy
-    # `from generator.cli import …` imports resolve.
-    if str(agents_dir) not in sys.path:
-        sys.path.insert(0, str(agents_dir))
-
-    # Resolve source — either a local markdown path or a Plane page that
-    # we download into systems/<workspace>/<project>/<slug>.md first.
-    source, project_code = _resolve_plane_source(args)
-
-    # Derive the drafts namespace + system H1 unless the operator
-    # overrode it. Plane mode falls back to the resolved project code
-    # (e.g. CAPP); local mode falls back to the source filename stem.
-    project = args.project or project_code or Path(source).stem
-    if not project:
-        # Pathological case: empty string source. Surface a clear error
-        # instead of letting run.py choke on `--project ""`.
-        print("ERROR: cannot derive a project name from the source.",
-              file=sys.stderr)
-        sys.exit(1)
-
-    mod = _load_module("generator_run", script)
-    argv = [source, "--project", project]
-    if args.drafts_root:
-        argv += ["--drafts-root", args.drafts_root]
-    if args.system_name:
-        argv += ["--system-name", args.system_name]
-    if args.run_id:
-        argv += ["--run-id", args.run_id]
-    if args.llm:
-        argv.append("--llm")
-    if args.no_llm:
-        argv.append("--no-llm")
-    if args.dry_run:
-        argv.append("--dry-run")
-    if args.step:
-        argv += ["--step", args.step]
-    sys.exit(mod.main(argv))
+#
+# REMOVED. The `se generate` wrapper is gone. The generator agent itself
+# (the Python pipeline under agents/generator/) is still available and
+# remains the canonical way to produce reviewable spec drafts. Operators
+# should invoke it directly:
+#
+#     python3 agents/generator/cli/run.py <source.md> --project <NAME> --no-llm
+#     python3 agents/generator/cli/run.py <source.md> --project <NAME> --step render
+#     python3 agents/generator/cli/run.py <source.md> --project <NAME> --plane-project CAPP --plane-page <uuid>
+#
+# Inside Claude Code the generator subagent (`.claude/agents/generator.md`,
+# scaffolded by `se init`) still runs end-to-end via its own AGENT.md
+# instructions — that path was unaffected by removing the wrapper.
+#
+# The `_resolve_plane_source` helper that flipped `--plane-project` +
+# `--plane-page` into a downloaded markdown file was specific to
+# `cmd_generate` and went away with it; `download_project_pages.py`
+# still exposes the same `download_single_page` primitive for any
+# downstream caller that needs it.
 
 
 # ── se taskgen ────────────────────────────────────────────────────────────────
@@ -1903,8 +1824,8 @@ def cmd_generate(args: argparse.Namespace) -> None:
 #   se taskgen <PROJECT_UUID> <PAGE_UUID> --dry-run   # preview only
 #   se taskgen <PROJECT_UUID> <PAGE_UUID> --yes       # full pipeline
 #
-# We dispatch via importlib (same in-process pattern as cmd_generate /
-# cmd_plane_sync) so the PyInstaller bundle can call into the agents/ data
+# We dispatch via importlib (same in-process pattern as cmd_plane_sync)
+# so the PyInstaller bundle can call into the agents/ data
 # bundle without spawning subprocess(sys.executable, …) — which would
 # re-enter the `se` entrypoint, not run.py.
 
@@ -2731,40 +2652,10 @@ def main() -> None:
     )
     _add_plane_profile_flags(p_pages)
 
-    p_gen = sub.add_parser("generate",
-                           help="Run the generator chain (extract → outline → render)")
-    p_gen.add_argument("source", nargs="?", default=None,
-                       help="Path to source document (markdown). Omit when "
-                            "using --plane-project + --plane-page.")
-    p_gen.add_argument("--plane-project", default=None, dest="plane_project",
-                       metavar="CODE_OR_UUID",
-                       help="Pull source from Plane: project UUID or short "
-                            "identifier (e.g. CAPP). Requires --plane-page.")
-    p_gen.add_argument("--plane-page", default=None, dest="plane_page",
-                       metavar="PAGE_UUID",
-                       help="Plane page UUID to use as source. Pairs with "
-                            "--plane-project; downloaded to "
-                            "systems/<workspace>/<project>/<slug>.md.")
-    p_gen.add_argument("--project", default=None,
-                       help="Override the drafts namespace + system H1. "
-                            "Defaults to the source filename stem in local "
-                            "mode, or the Plane project code (e.g. CAPP) "
-                            "in --plane-project mode.")
-    p_gen.add_argument("--drafts-root", default=None, metavar="DIR",
-                       help="Drafts root (default: drafts/)")
-    p_gen.add_argument("--system-name", default=None,
-                       help="System H1 (default: --project value)")
-    p_gen.add_argument("--run-id", default=None,
-                       help="Override run ID (default: UTC timestamp)")
-    gen_mode = p_gen.add_mutually_exclusive_group()
-    gen_mode.add_argument("--llm", action="store_true",
-                          help="Call Anthropic API (Phase D, deferred)")
-    gen_mode.add_argument("--no-llm", action="store_true",
-                          help="Skip outline; produce extract.json only")
-    gen_mode.add_argument("--dry-run", action="store_true",
-                          help="Extract only, do not render")
-    p_gen.add_argument("--step", choices=("extract", "outline", "render"),
-                       default=None, help="Run a single step")
+    # NOTE: `se generate` subparser was removed. The generator agent is
+    # invoked directly via `python3 agents/generator/cli/run.py`; the
+    # subagent definition under `.claude/agents/generator.md` is
+    # unaffected.
 
     p_tg = sub.add_parser(
         "taskgen",
@@ -3096,7 +2987,7 @@ def main() -> None:
         "doctor": cmd_doctor,
         "download": cmd_download,
         "pages": cmd_pages,
-        "generate": cmd_generate,
+        # NOTE: `generate` removed — call `agents/generator/cli/run.py` directly.
         "taskgen": cmd_taskgen,
         "plane-sync": cmd_plane_sync,
     }[args.cmd](args)

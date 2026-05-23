@@ -11,9 +11,12 @@ See also:
 
 ## Quick start
 
+The `se generate` wrapper was removed — invoke the generator script
+(`cli/run.py`) directly. `--project <NAME>` is required.
+
 ```bash
 # 1. Extract — produce extract.json under drafts/<project>/runs/<RID>/
-se generate path/to/spec.md --project DEMO --no-llm
+python3 agents/generator/cli/run.py path/to/spec.md --project DEMO --no-llm
 
 # 2. Outline — manual today (Phase D deferred). In a Claude Code session,
 #    paste the contents of extract.json and ask Claude to produce an
@@ -21,24 +24,27 @@ se generate path/to/spec.md --project DEMO --no-llm
 #    Save the result into drafts/DEMO/runs/<RID>/outline.json.
 
 # 3. Render — emit one *.md per epic under drafts/DEMO/runs/<RID>/drafts/
-se generate path/to/spec.md --project DEMO --step render --system-name "Demo"
+python3 agents/generator/cli/run.py path/to/spec.md --project DEMO --step render --system-name "Demo"
 ```
 
 ## Operator entry
 
 ```bash
-se generate <source.md> --project <name>                       # default: offline, stops after extract
-se generate <source.md> --project <name> --dry-run             # same as default; extract only
-se generate <source.md> --project <name> --no-llm              # explicit offline; extract only
-se generate <source.md> --project <name> --llm                 # Phase D — currently refused with pointer
-se generate <source.md> --project <name> --step extract        # single-step: extract only
-se generate <source.md> --project <name> --step outline        # no-op today (Phase D deferred)
-se generate <source.md> --project <name> --step render         # render only (needs outline.json)
-se generate <source.md> --project <name> --system-name "Foo"   # override H1 (default: --project value)
-se generate <source.md> --project <name> --run-id RID-1        # override timestamp run id
+python3 agents/generator/cli/run.py <source.md> --project <NAME>                       # default: offline, stops after extract
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --dry-run             # same as default; extract only
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --no-llm              # explicit offline; extract only
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --llm                 # Phase D — currently refused with pointer
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --step extract        # single-step: extract only
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --step outline        # no-op today (Phase D deferred)
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --step render         # render only (needs outline.json)
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --system-name "Foo"   # override H1 (default: --project value)
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --run-id RID-1        # override timestamp run id
 ```
 
-`cli/run.py` is the internal implementation; `se generate` wraps it. Both accept the same flags.
+`cli/run.py` is the canonical entry point. There is no `se generate`
+wrapper anymore. Inside Claude Code the generator subagent
+(`.claude/agents/generator.md`, scaffolded by `se init`) still drives the
+full chain end-to-end.
 
 ## Output structure
 

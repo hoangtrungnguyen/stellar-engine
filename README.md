@@ -105,9 +105,10 @@ bash scripts/install-local.sh   # copies the binary to $HOME/.local/bin
 se --version                                  # report which build you have
 se --help
 se doctor --dir .                             # validate environment
-se generate path/to/spec.md                   # turn markdown into spec drafts
-se generate --plane-project CAPP --plane-page <page-uuid>
-                                              # …or source directly from a Plane page
+# Generator agent (markdown → reviewable spec drafts) — invoked directly,
+# no `se generate` wrapper. Inside Claude Code use the generator subagent.
+python3 agents/generator/cli/run.py path/to/spec.md --project DEMO --no-llm
+python3 agents/generator/cli/run.py --plane-project CAPP --plane-page <page-uuid> --project DEMO --no-llm
 se download <plane-project-uuid>              # pull all Plane pages → systems/
 se download CAPP --page-id <page-uuid>        # single page; project code resolves via API
 se download CAPP --page-name "Architecture"   # single page by name (case-sensitive)

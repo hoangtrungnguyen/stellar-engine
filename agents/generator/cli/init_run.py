@@ -1,8 +1,8 @@
 """init_run — provision drafts/<project>/runs/<run_id>/ for a new generator run.
 
 Writes a minimal `run.json` stub into the new directory and prints the
-run directory path on stdout (chainable: `WORK=$(se generate ... | …)`
-or `WORK=$(init_run --project foo)`).
+run directory path on stdout (chainable: `WORK=$(init_run --project foo)`
+or `WORK=$(python3 agents/generator/cli/run.py … | …)`).
 
 Exit codes:
   0  run directory created (path printed to stdout)

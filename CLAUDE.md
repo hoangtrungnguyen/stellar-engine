@@ -67,16 +67,19 @@ python3 cli/se plane-sync [ISSUE_ID] --project-id <uuid> --grava-repo <path> \
                                                    # (agent hooks rely on this).
 
 # Generate reviewable spec drafts from a markdown source (no Plane / grava writes)
-python3 cli/se generate <source.md>                                  # offline: extract.json only
-                                                                     # drafts namespace = source filename stem.
-python3 cli/se generate <source.md> --step render                    # render after manual outline.json
-python3 cli/se generate --plane-project CAPP --plane-page <page-uuid>
-                                                   # source from a Plane page: downloads to
+# The `se generate` wrapper was removed — call the generator script directly.
+# Inside Claude Code, the generator subagent (`.claude/agents/generator.md`
+# scaffolded by `se init`) still drives the full pipeline end-to-end.
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --no-llm
+                                                   # offline: extract.json only
+                                                   # drafts namespace = --project value (required).
+python3 agents/generator/cli/run.py <source.md> --project <NAME> --step render
+                                                   # render after manual outline.json
+python3 agents/generator/cli/run.py --plane-project CAPP --plane-page <page-uuid> --project CAPP --no-llm
+                                                   # source from a Plane page (Plane mode);
+                                                   # download_project_pages.py drops the page at
                                                    # systems/<workspace>/<CAPP>/<slug>.md first,
-                                                   # then runs the generator chain on it.
-                                                   # drafts namespace defaults to the Plane project code (CAPP).
-                                                   # Pass --project <name> to override the namespace
-                                                   # (and the system H1) in any mode.
+                                                   # then run.py uses it as the source.
 # See agents/generator/README.md for the full walkthrough including manual outline step.
 
 # Generate work items from a Plane spec page (dry-run first)
