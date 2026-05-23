@@ -59,7 +59,19 @@ class FakeClient:
         i = len(self.created)
         new_id = f"wi-{i}"
         self.calls.append(("create", project_id, payload))
-        self.created.append({"payload": payload, "id": new_id})
+        self.created.append({"payload": payload, "id": new_id, "kind": "work-item"})
+        return {"id": new_id, "sequence_id": 100 + i}
+
+    # Epics use the first-class /epics/ endpoint. The fake records them under
+    # the same "create" call marker so existing call-order assertions work,
+    # but distinguishes via self.created[*]["kind"]. The id pool is shared
+    # so child work-items resolve parent UUIDs correctly.
+    def create_epic(self, project_id, payload):
+        self._maybe_fail("create_epic")
+        i = len(self.created)
+        new_id = f"wi-{i}"
+        self.calls.append(("create", project_id, payload))
+        self.created.append({"payload": payload, "id": new_id, "kind": "epic"})
         return {"id": new_id, "sequence_id": 100 + i}
 
     def add_comment(self, project_id, issue_id, comment_html):
@@ -76,9 +88,18 @@ class FakeClient:
         self.calls.append(("update", project_id, issue_id, payload))
         return {"id": issue_id}
 
+    def update_epic(self, project_id, epic_id, payload):
+        self._maybe_fail("update_epic")
+        self.calls.append(("update", project_id, epic_id, payload))
+        return {"id": epic_id}
+
     def delete_work_item(self, project_id, issue_id):
         self._maybe_fail("delete_work_item")
         self.calls.append(("delete", project_id, issue_id))
+
+    def delete_epic(self, project_id, epic_id):
+        self._maybe_fail("delete_epic")
+        self.calls.append(("delete", project_id, epic_id))
 
     # ── Phase 6 relations API ──
     def list_relations(self, project_id, issue_id):
@@ -250,7 +271,9 @@ def test_execute_rollback_deletes_in_reverse(tmp_path):
 def test_execute_abort_persists_failure(tmp_path):
     plan = _make_plan(_hierarchy_ops())
     state = _make_state(tmp_path, len(plan.plane_ops))
-    client = FakeClient(fail_on={("create_work_item", 2): RuntimeError("503")})
+    # Epic (op 0) goes via create_epic; stories+task go via create_work_item.
+    # Fail on the 2nd create_work_item occurrence → op index 2 (second story).
+    client = FakeClient(fail_on={("create_work_item", 1): RuntimeError("503")})
     state_path = tmp_path / "state.json"
     report_path = tmp_path / "report.json"
     report = plane_writer.execute(
@@ -289,7 +312,8 @@ def test_execute_writes_report_on_success(tmp_path):
 def test_execute_writes_report_on_failure(tmp_path):
     plan = _make_plan(_hierarchy_ops())
     state = _make_state(tmp_path, len(plan.plane_ops))
-    client = FakeClient(fail_on={("create_work_item", 0): RuntimeError("oops")})
+    # Op 0 is the epic — it goes via create_epic, so we fail on that endpoint.
+    client = FakeClient(fail_on={("create_epic", 0): RuntimeError("oops")})
     report_path = tmp_path / "report.json"
     plane_writer.execute(
         plan, client, state, "proj", TYPE_MAP,
@@ -335,17 +359,25 @@ def test_execute_prompt_no_aborts(tmp_path):
 
 
 def test_execute_missing_type_raises_helpful_error(tmp_path):
-    plan = _make_plan(_hierarchy_ops()[:1])
+    # Story creates require a `story` type_id from the map. Epic creates use
+    # the /epics/ endpoint and do not consult the map. Construct a story-only
+    # plan with the `story` type missing to exercise the helpful error.
+    plan = _make_plan([
+        CreateWorkItem(
+            node_kind="story", title="S", description_html="",
+            type_id_key="story", parent_ref=None, ref_key="story:0",
+        ),
+    ])
     state = _make_state(tmp_path, 1)
     client = FakeClient()
     report = plane_writer.execute(
-        plan, client, state, "proj", {"story": "s", "task": "t"},  # epic missing
+        plan, client, state, "proj", {"task": "t"},  # story missing
         state_path=tmp_path / "state.json",
         report_path=tmp_path / "report.json",
         on_failure="abort",
     )
     assert report.failed_op is not None
-    assert "epic" in report.failed_op["detail"]
+    assert "story" in report.failed_op["detail"]
 
 
 def test_create_applies_label_uuids(tmp_path):
@@ -387,6 +419,104 @@ def test_create_propagates_priority(tmp_path):
     )
     create_call = next(c for c in client.calls if c[0] == "create")
     assert create_call[2]["priority"] == "urgent"
+
+
+# ── Epic dispatch (first-class /epics/ endpoint, distinct field names) ──
+def test_epic_create_routes_to_create_epic(tmp_path):
+    """Epic ops call create_epic (not create_work_item) on the client."""
+    op = CreateWorkItem(
+        node_kind="epic", title="Auth", description_html="<p>desc</p>",
+        type_id_key="epic", parent_ref=None, ref_key="epic:0",
+    )
+    plan = _make_plan([op])
+    state = _make_state(tmp_path, 1)
+    client = FakeClient()
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+    )
+    # FakeClient.created records each create with its endpoint kind.
+    assert len(client.created) == 1
+    assert client.created[0]["kind"] == "epic"
+
+
+def test_epic_payload_uses_epic_field_names(tmp_path):
+    """Epic ops send parent_id + label_ids (Plane epic API field names),
+    NOT parent + labels (those are work-item field names)."""
+    # Two epics, second depends on first for the parent_id wire-up.
+    plan = _make_plan([
+        CreateWorkItem(
+            node_kind="epic", title="Root", description_html="",
+            type_id_key="epic", parent_ref=None, ref_key="epic:0",
+            label_keys=["tg:src:page-A"], priority="high",
+        ),
+        CreateWorkItem(
+            node_kind="epic", title="Child", description_html="",
+            type_id_key="epic", parent_ref="epic:0", ref_key="epic:1",
+            label_keys=["tg:src:page-A", "bug"],
+        ),
+    ])
+    state = _make_state(tmp_path, 2)
+    client = FakeClient()
+    label_map = {"tg:src:page-A": "lbl-1", "bug": "lbl-2"}
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="abort",
+        label_map=label_map,
+    )
+    create_calls = [c for c in client.calls if c[0] == "create"]
+    root_payload = create_calls[0][2]
+    child_payload = create_calls[1][2]
+    # No type_id on epic creates (the /epics/ endpoint doesn't consume it).
+    assert "type_id" not in root_payload
+    assert "type_id" not in child_payload
+    # Root epic: labels under label_ids, priority forwarded, no parent.
+    assert root_payload["label_ids"] == ["lbl-1"]
+    assert root_payload["priority"] == "high"
+    assert "parent_id" not in root_payload
+    assert "parent" not in root_payload
+    # Child epic: parent_id (epic-API name), NOT `parent` (work-item-API name).
+    assert child_payload["parent_id"] == "wi-0"
+    assert "parent" not in child_payload
+    assert sorted(child_payload["label_ids"]) == ["lbl-1", "lbl-2"]
+    assert "labels" not in child_payload
+
+
+def test_epic_rollback_uses_delete_epic(tmp_path):
+    """Failed write rolls back via delete_epic (not delete_work_item) for epics."""
+    plan = _make_plan([
+        CreateWorkItem(
+            node_kind="epic", title="E", description_html="",
+            type_id_key="epic", parent_ref=None, ref_key="epic:0",
+        ),
+        CreateWorkItem(
+            node_kind="story", title="S", description_html="",
+            type_id_key="story", parent_ref="epic:0", ref_key="story:0.0",
+        ),
+        CreateWorkItem(
+            node_kind="task", title="T", description_html="",
+            type_id_key="task", parent_ref="story:0.0", ref_key="task:0",
+        ),
+    ])
+    state = _make_state(tmp_path, len(plan.plane_ops))
+    # Fail on the 2nd work-item create (the task) so epic + story already exist.
+    client = FakeClient(fail_on={("create_work_item", 1): RuntimeError("oops")})
+    plane_writer.execute(
+        plan, client, state, "proj", TYPE_MAP,
+        state_path=tmp_path / "state.json",
+        report_path=tmp_path / "report.json",
+        on_failure="rollback",
+    )
+    # Two creates succeeded (epic wi-0, story wi-1); rollback deletes both.
+    delete_calls = [c for c in client.calls if c[0] == "delete"]
+    assert [c[2] for c in delete_calls] == ["wi-1", "wi-0"]
+    # Epic deletion goes through FakeClient.delete_epic (count via _counts).
+    assert client._counts.get("delete_epic", 0) == 1
+    assert client._counts.get("delete_work_item", 0) == 1
 
 
 def test_diff_no_change_skips_create(tmp_path):

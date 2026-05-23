@@ -127,13 +127,18 @@ def test_find_duplicate_pages_skips_archived_and_deleted():
 def test_assert_required_types_passes():
     type_map = build_type_map(TYPES)
     assert_required_types(type_map)
-    assert type_map["epic"] == "type-epic"
+    # Epic uses the first-class /epics/ endpoint — no type_id consumed,
+    # so REQUIRED_TYPES omits it. build_type_map only emits keys that are
+    # required.
+    assert type_map["story"] == "type-story"
+    assert type_map["task"] == "type-task"
+    assert "epic" not in type_map
 
 
 def test_assert_required_types_missing_raises():
-    only_two = [{"id": "x", "name": "Story"}, {"id": "y", "name": "Task"}]
-    with pytest.raises(PlannerError, match="epic"):
-        assert_required_types(build_type_map(only_two))
+    only_one = [{"id": "x", "name": "Story"}]  # task missing
+    with pytest.raises(PlannerError, match="task"):
+        assert_required_types(build_type_map(only_one))
 
 
 def test_plan_duplicate_page_raises():

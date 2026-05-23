@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -36,7 +37,15 @@ def main(argv: list[str] | None = None) -> int:
         description="task-generator: end-to-end orchestrator (preview + Phase-2 writes)."
     )
     ap.add_argument("project_id")
-    ap.add_argument("page_id")
+    ap.add_argument(
+        "page_id", nargs="?", default=None,
+        help="Plane page UUID. Omit when --source-md is provided.",
+    )
+    ap.add_argument(
+        "--source-md", type=Path, default=None,
+        help="Read spec markdown from this local file instead of a Plane page. "
+             "Mutually exclusive with the page_id positional arg.",
+    )
     ap.add_argument("--target-repo", type=Path, default=None)
     ap.add_argument("--no-clone", action="store_true")
     ap.add_argument("--allow-duplicate-pages", action="store_true")
@@ -62,6 +71,24 @@ def main(argv: list[str] | None = None) -> int:
              "dep_graph.json exists.",
     )
     args = ap.parse_args(argv)
+
+    # Validate mutex: exactly one of {page_id, --source-md}.
+    if args.page_id and args.source_md:
+        ap.error("page_id and --source-md are mutually exclusive")
+    if not args.page_id and not args.source_md:
+        ap.error("either page_id (positional) or --source-md PATH is required")
+    if args.source_md:
+        if not args.source_md.is_file():
+            print(f"--source-md: file not found: {args.source_md}", file=sys.stderr)
+            return 1
+        if args.source_md.suffix.lower() != ".md":
+            print(f"--source-md: only .md files supported: {args.source_md}", file=sys.stderr)
+            return 1
+        # Synthesize a stable spec id from the absolute path so downstream
+        # code (sentinel labels, state.page_id, RunReport.spec_page_id) keeps
+        # its existing shape. Re-runs against the same path get the same id.
+        src_path = str(args.source_md.resolve())
+        args.page_id = "md-" + hashlib.sha1(src_path.encode("utf-8")).hexdigest()[:12]
 
     # Step 1: resolve repo (clone if missing)
     try:
@@ -95,48 +122,66 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     client = PlaneClient(host=host, workspace=workspace, token=token)
 
-    # Step 3: fetch page
-    try:
-        page = client.get_page(args.project_id, args.page_id)
-    except PlaneClientError as e:
-        print(f"fetch failed: HTTP {e.status} on {e.url}", file=sys.stderr)
-        return 1
-    spec_url = (
-        f"https://app.plane.so/{workspace}/projects/{args.project_id}"
-        f"/pages/{args.page_id}/"
-    )
-    page_payload = {
-        "project_id": args.project_id,
-        "page_id": args.page_id,
-        "title": page.get("name", ""),
-        "description_html": page.get("description_html", ""),
-        "spec_page_url": spec_url,
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
+    # Step 3: fetch markdown spec (from Plane page OR local file)
+    if args.source_md:
+        md_body = args.source_md.read_text(encoding="utf-8")
+        spec_url = f"file://{args.source_md.resolve()}"
+        page_payload = {
+            "project_id": args.project_id,
+            "page_id": args.page_id,  # synthesized md-<hash>
+            "source_md_path": str(args.source_md.resolve()),
+            "title": args.source_md.stem,
+            "description_html": "",  # unused in local-md mode
+            "spec_page_url": spec_url,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        target_title = args.source_md.stem
+        duplicates: list[dict] = []
+    else:
+        try:
+            page = client.get_page(args.project_id, args.page_id)
+        except PlaneClientError as e:
+            print(f"fetch failed: HTTP {e.status} on {e.url}", file=sys.stderr)
+            return 1
+        spec_url = (
+            f"https://app.plane.so/{workspace}/projects/{args.project_id}"
+            f"/pages/{args.page_id}/"
+        )
+        page_payload = {
+            "project_id": args.project_id,
+            "page_id": args.page_id,
+            "title": page.get("name", ""),
+            "description_html": page.get("description_html", ""),
+            "spec_page_url": spec_url,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        md_body = None  # parsed in Step 5 from page_payload["description_html"]
     (work_dir / "page.json").write_text(json.dumps(page_payload, indent=2), encoding="utf-8")
 
     # Step 4: preflight (dup check + types + labels)
-    try:
-        pages = client.list_pages(args.project_id)
-    except PlaneClientError as e:
-        print(f"list_pages failed: HTTP {e.status} on {e.url}", file=sys.stderr)
-        return 1
+    # Dup-check only applies when the spec source is a Plane page.
+    if not args.source_md:
+        try:
+            pages = client.list_pages(args.project_id)
+        except PlaneClientError as e:
+            print(f"list_pages failed: HTTP {e.status} on {e.url}", file=sys.stderr)
+            return 1
 
-    target_title, duplicates = find_duplicate_pages(pages, args.page_id)
-    if duplicates and not args.allow_duplicate_pages:
-        print(
-            f"\nDuplicate page(s) detected for target page {args.page_id} "
-            f"(title: {target_title!r}):",
-            file=sys.stderr,
-        )
-        for d in duplicates:
-            print(f"  - {d.get('id')}: {d.get('name')}", file=sys.stderr)
-        print(
-            "\nPlane's REST API does not support page delete/update — resolve via "
-            "the Plane web UI, or re-run with --allow-duplicate-pages to proceed anyway.",
-            file=sys.stderr,
-        )
-        return 3
+        target_title, duplicates = find_duplicate_pages(pages, args.page_id)
+        if duplicates and not args.allow_duplicate_pages:
+            print(
+                f"\nDuplicate page(s) detected for target page {args.page_id} "
+                f"(title: {target_title!r}):",
+                file=sys.stderr,
+            )
+            for d in duplicates:
+                print(f"  - {d.get('id')}: {d.get('name')}", file=sys.stderr)
+            print(
+                "\nPlane's REST API does not support page delete/update — resolve via "
+                "the Plane web UI, or re-run with --allow-duplicate-pages to proceed anyway.",
+                file=sys.stderr,
+            )
+            return 3
 
     try:
         project = client.get_project(args.project_id)
@@ -213,7 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     (work_dir / "preflight.json").write_text(json.dumps(preflight_payload, indent=2), encoding="utf-8")
 
     # Step 5: parse
-    md = html_to_markdown(page_payload["description_html"])
+    if args.source_md:
+        md = md_body  # raw markdown straight from file
+    else:
+        md = html_to_markdown(page_payload["description_html"])
     epics, warnings = parse(
         md,
         spec_page_url=spec_url,

@@ -197,6 +197,35 @@ def test_delete_work_item_returns_none_on_204(monkeypatch):
     assert recorded[0]["url"].endswith("/projects/proj/work-items/wi-1/")
 
 
+# ── Epic endpoint (first-class, distinct from /work-items/) ────────────
+def test_create_epic_hits_epics_endpoint(monkeypatch):
+    """POST /projects/{pid}/epics/ — different path from /work-items/."""
+    client, recorded = _client_with_recorder(
+        monkeypatch, [(201, {"id": "epic-1", "sequence_id": 7})]
+    )
+    out = client.create_epic("proj", {"name": "Auth"})
+    assert out == {"id": "epic-1", "sequence_id": 7}
+    assert recorded[0]["method"] == "POST"
+    assert recorded[0]["url"].endswith("/projects/proj/epics/")
+    assert recorded[0]["kwargs"]["json"] == {"name": "Auth"}
+
+
+def test_update_epic_uses_patch_on_epics_endpoint(monkeypatch):
+    client, recorded = _client_with_recorder(monkeypatch, [(200, {"id": "epic-1"})])
+    client.update_epic("proj", "epic-1", {"priority": "high"})
+    assert recorded[0]["method"] == "PATCH"
+    assert recorded[0]["url"].endswith("/projects/proj/epics/epic-1/")
+    assert recorded[0]["kwargs"]["json"] == {"priority": "high"}
+
+
+def test_delete_epic_hits_epics_endpoint(monkeypatch):
+    client, recorded = _client_with_recorder(monkeypatch, [(204, None)])
+    out = client.delete_epic("proj", "epic-1")
+    assert out is None
+    assert recorded[0]["method"] == "DELETE"
+    assert recorded[0]["url"].endswith("/projects/proj/epics/epic-1/")
+
+
 def test_add_comment_posts_html(monkeypatch):
     client, recorded = _client_with_recorder(monkeypatch, [(201, {"id": "c-1"})])
     out = client.add_comment("proj", "wi-1", "<p>hi</p>")
