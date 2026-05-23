@@ -168,13 +168,16 @@ def execute(
         started_at=state.started_at,
     )
     completed = set(state.completed_op_indices)
-    create_order: list[tuple[int, str, str]] = []  # (idx, ref_key, uuid) for rollback
+    # (idx, ref_key, uuid, node_kind) — node_kind picks delete endpoint at rollback.
+    create_order: list[tuple[int, str, str, str]] = []
 
     # Pre-populate create_order from any prior creates already in state.
     for idx in sorted(completed):
         op = plan.plane_ops[idx]
         if isinstance(op, CreateWorkItem) and op.ref_key in state.ref_to_uuid:
-            create_order.append((idx, op.ref_key, state.ref_to_uuid[op.ref_key]))
+            create_order.append(
+                (idx, op.ref_key, state.ref_to_uuid[op.ref_key], op.node_kind)
+            )
 
     try:
         for idx, op in enumerate(plan.plane_ops):
@@ -274,32 +277,55 @@ def _dispatch(
             return
 
         # Default = create path (Phase 2 behaviour).
-        type_id = type_map.get(op.type_id_key) or ""
-        if not type_id:
-            raise RuntimeError(
-                f"Cannot create work item: Plane type {op.type_id_key!r} not found in project. "
-                f"Create the type in Plane and re-run."
-            )
-        payload = {
-            "name": op.title,
-            "type_id": type_id,
-        }
-        if op.description_html:
-            payload["description_html"] = op.description_html
-        if op.parent_ref:
-            parent_uuid = state.ref_to_uuid.get(op.parent_ref)
-            if not parent_uuid:
-                raise RuntimeError(
-                    f"Op {idx} ({op.ref_key}): parent_ref {op.parent_ref!r} unresolved "
-                    f"(parent not created yet)."
-                )
-            payload["parent"] = parent_uuid
+        # Epics use the first-class /epics/ endpoint (distinct field names).
+        # Stories + tasks use /work-items/ with type_id.
+        is_epic = op.node_kind == "epic"
         label_uuids = [label_map[k] for k in op.label_keys if k in label_map]
-        if label_uuids:
-            payload["labels"] = label_uuids
-        if op.priority:
-            payload["priority"] = op.priority
-        resp = client.create_work_item(project_id, payload)
+
+        if is_epic:
+            payload = {"name": op.title}
+            if op.description_html:
+                payload["description_html"] = op.description_html
+            if op.parent_ref:
+                parent_uuid = state.ref_to_uuid.get(op.parent_ref)
+                if not parent_uuid:
+                    raise RuntimeError(
+                        f"Op {idx} ({op.ref_key}): parent_ref {op.parent_ref!r} unresolved "
+                        f"(parent not created yet)."
+                    )
+                payload["parent_id"] = parent_uuid
+            if label_uuids:
+                payload["label_ids"] = label_uuids
+            if op.priority:
+                payload["priority"] = op.priority
+            resp = client.create_epic(project_id, payload)
+        else:
+            type_id = type_map.get(op.type_id_key) or ""
+            if not type_id:
+                raise RuntimeError(
+                    f"Cannot create work item: Plane type {op.type_id_key!r} not found in project. "
+                    f"Create the type in Plane and re-run."
+                )
+            payload = {
+                "name": op.title,
+                "type_id": type_id,
+            }
+            if op.description_html:
+                payload["description_html"] = op.description_html
+            if op.parent_ref:
+                parent_uuid = state.ref_to_uuid.get(op.parent_ref)
+                if not parent_uuid:
+                    raise RuntimeError(
+                        f"Op {idx} ({op.ref_key}): parent_ref {op.parent_ref!r} unresolved "
+                        f"(parent not created yet)."
+                    )
+                payload["parent"] = parent_uuid
+            if label_uuids:
+                payload["labels"] = label_uuids
+            if op.priority:
+                payload["priority"] = op.priority
+            resp = client.create_work_item(project_id, payload)
+
         new_id = resp.get("id")
         seq = resp.get("sequence_id")
         if not new_id:
@@ -315,7 +341,7 @@ def _dispatch(
             "sequence_id": seq,
             "title": op.title,
         })
-        create_order.append((idx, op.ref_key, new_id))
+        create_order.append((idx, op.ref_key, new_id, op.node_kind))
         return
 
     if isinstance(op, AddComment):
@@ -379,7 +405,7 @@ def _handle_failure(
     project_id: str,
     state: RunState,
     report: RunReport,
-    create_order: list[tuple[int, str, str]],
+    create_order: list[tuple[int, str, str, str]],
     state_path: Path,
     report_path: Path,
     on_failure: str,
@@ -438,14 +464,17 @@ def _handle_failure(
 def _rollback(
     client,
     project_id: str,
-    create_order: list[tuple[int, str, str]],
+    create_order: list[tuple[int, str, str, str]],
     report: RunReport,
 ) -> None:
     deleted = 0
     failed_deletes = []
-    for idx, ref_key, uuid in reversed(create_order):
+    for idx, ref_key, uuid, node_kind in reversed(create_order):
         try:
-            client.delete_work_item(project_id, uuid)
+            if node_kind == "epic":
+                client.delete_epic(project_id, uuid)
+            else:
+                client.delete_work_item(project_id, uuid)
             deleted += 1
         except Exception as exc:  # noqa: BLE001
             failed_deletes.append({"ref_key": ref_key, "uuid": uuid, "detail": str(exc)})

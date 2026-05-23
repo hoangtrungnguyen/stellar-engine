@@ -1821,8 +1821,16 @@ def cmd_pages(args: argparse.Namespace) -> None:
 # repo-map.yaml (Plane UUID → repo, auto-cloned if missing) unless overridden
 # by --target-repo.
 #
-#   se taskgen <PROJECT_UUID> <PAGE_UUID> --dry-run   # preview only
-#   se taskgen <PROJECT_UUID> <PAGE_UUID> --yes       # full pipeline
+#   se taskgen <PROJECT_UUID> <PAGE_UUID> --dry-run            # preview from Plane page
+#   se taskgen <PROJECT_UUID> <PAGE_UUID> --yes                # full pipeline from Plane page
+#   se taskgen <PROJECT_UUID> --source-md path.md --dry-run    # preview from local .md
+#   se taskgen <PROJECT_UUID> --source-md path.md --yes        # full pipeline from local .md
+#
+# Local-md mode skips the Plane page fetch + duplicate-page check, derives a
+# stable synthetic spec id from the file's absolute path (so re-runs of the
+# same file are idempotent), and feeds the markdown straight into the parser.
+# Epic work items are created via Plane's first-class /epics/ endpoint;
+# stories + tasks go through /work-items/ with the appropriate type_id.
 #
 # We dispatch via importlib (same in-process pattern as cmd_plane_sync)
 # so the PyInstaller bundle can call into the agents/ data
@@ -1855,7 +1863,11 @@ def cmd_taskgen(args: argparse.Namespace) -> None:
     _apply_plane_profile_env(args)
     mod = _load_module("taskgen_run", script)
 
-    argv = [args.project_id, args.page_id]
+    argv = [args.project_id]
+    if args.page_id:
+        argv.append(args.page_id)
+    if getattr(args, "source_md", None):
+        argv += ["--source-md", args.source_md]
     if args.target_repo:
         argv += ["--target-repo", args.target_repo]
     if args.no_clone:
@@ -2662,7 +2674,15 @@ def main() -> None:
         help="Plane spec page → Plane epics/stories/tasks + Grava mirror",
     )
     p_tg.add_argument("project_id", help="Plane project UUID")
-    p_tg.add_argument("page_id", help="Plane page UUID (the spec page)")
+    p_tg.add_argument(
+        "page_id", nargs="?", default=None,
+        help="Plane page UUID (the spec page). Omit when --source-md is provided.",
+    )
+    p_tg.add_argument(
+        "--source-md", default=None, metavar="PATH",
+        help="Read spec markdown from this local file instead of a Plane page. "
+             "Mutually exclusive with the page_id positional arg.",
+    )
     p_tg.add_argument("--target-repo", default=None, metavar="DIR",
                       help="Override repo-map.yaml lookup")
     p_tg.add_argument("--no-clone", action="store_true",

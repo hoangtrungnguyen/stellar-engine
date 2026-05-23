@@ -180,6 +180,31 @@ class PlaneClient:
     def delete_work_item(self, project_id: str, issue_id: str) -> None:
         self._request("DELETE", f"projects/{project_id}/work-items/{issue_id}/")
 
+    # ── Epics (first-class endpoint, distinct from work-items) ───
+    # Plane exposes a separate `/epics/` resource for the first-class Epic
+    # work-item kind. Field names differ from /work-items/:
+    #   parent_id   (not parent)
+    #   label_ids   (not labels)
+    #   assignee_ids (not assignees)
+    #   state_id    (not state)
+    # See https://developers.plane.so/api-reference/epics/create-epic
+    def create_epic(self, project_id: str, payload: dict) -> dict:
+        return self._request(
+            "POST",
+            f"projects/{project_id}/epics/",
+            json=payload,
+        )
+
+    def update_epic(self, project_id: str, epic_id: str, payload: dict) -> dict:
+        return self._request(
+            "PATCH",
+            f"projects/{project_id}/epics/{epic_id}/",
+            json=payload,
+        )
+
+    def delete_epic(self, project_id: str, epic_id: str) -> None:
+        self._request("DELETE", f"projects/{project_id}/epics/{epic_id}/")
+
     # ── Comments ─────────────────────────────────────
     def add_comment(self, project_id: str, issue_id: str, comment_html: str) -> dict:
         return self._request(

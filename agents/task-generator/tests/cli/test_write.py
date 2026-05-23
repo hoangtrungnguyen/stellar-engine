@@ -91,6 +91,12 @@ class _FakeClient:
         self.created += 1
         return {"id": f"wi-{self.created}", "sequence_id": 100 + self.created}
 
+    # Epics use the first-class /epics/ endpoint. Share the create counter so
+    # parent UUID resolution works for stories created under the epic.
+    def create_epic(self, project_id, payload):
+        self.created += 1
+        return {"id": f"wi-{self.created}", "sequence_id": 100 + self.created}
+
     def add_comment(self, project_id, issue_id, comment_html):
         return {"id": "c-1"}
 
@@ -101,6 +107,9 @@ class _FakeClient:
         return {"id": issue_id}
 
     def delete_work_item(self, project_id, issue_id):
+        pass
+
+    def delete_epic(self, project_id, epic_id):
         pass
 
 
@@ -127,7 +136,9 @@ def test_write_blocks_on_missing_types_exit_4(monkeypatch, tmp_path, capsys):
     ])
     assert rc == 4
     assert "missing" in err
-    assert "epic" in err
+    # Epic uses /epics/ endpoint (no type_id); story+task are still required.
+    assert "story" in err
+    assert "task" in err
 
 
 def test_write_confirmation_required_on_first_run(monkeypatch, tmp_path, capsys):

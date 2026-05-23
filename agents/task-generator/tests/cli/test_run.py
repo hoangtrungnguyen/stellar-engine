@@ -194,7 +194,9 @@ def test_run_blocks_writes_when_types_missing(monkeypatch, tmp_path, capsys):
     ])
     assert rc == 4
     assert "missing" in err
-    assert "epic" in err
+    # Epic uses /epics/ endpoint (no type_id); story+task are still required.
+    assert "story" in err
+    assert "task" in err
 
 
 def test_run_propagates_write_exit_code(monkeypatch, tmp_path, capsys):
@@ -386,3 +388,122 @@ def test_run_propagates_duplicate_exit_3(monkeypatch, tmp_path, capsys):
     assert rc == 3
     assert "page-B" in err
     assert "--allow-duplicate-pages" in err
+
+
+# ── --source-md (local-md entry mode) ─────────────────────────────
+SAMPLE_MD = """# Local Spec
+
+## Auth
+Login + signup.
+
+### Sign up
+As a user, I want to sign up.
+
+- Build form
+- Validate email
+"""
+
+
+def test_run_source_md_dry_run_skips_plane_fetch(monkeypatch, tmp_path, capsys):
+    """--source-md reads a local file; no get_page / list_pages calls."""
+    target = _setup_yaml_repo(monkeypatch, tmp_path)
+    src_md = tmp_path / "spec.md"
+    src_md.write_text(SAMPLE_MD)
+
+    fetch_calls = {"get_page": 0, "list_pages": 0}
+
+    class NoFetchClient(FakeClient):
+        def get_page(self, *a, **kw):
+            fetch_calls["get_page"] += 1
+            raise AssertionError("get_page must not be called in --source-md mode")
+
+        def list_pages(self, *a, **kw):
+            fetch_calls["list_pages"] += 1
+            raise AssertionError("list_pages must not be called in --source-md mode")
+
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", NoFetchClient)
+
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "--source-md", str(src_md), "--dry-run", "--run-id", "rmd1",
+    ])
+    assert rc == 0
+    assert fetch_calls == {"get_page": 0, "list_pages": 0}
+    # page.json reflects the local source.
+    page_payload = json.loads((target / "runs" / "work" / "rmd1" / "page.json").read_text())
+    assert page_payload["source_md_path"].endswith("spec.md")
+    assert page_payload["spec_page_url"].startswith("file://")
+    assert page_payload["title"] == "spec"
+
+
+def test_run_source_md_synthesizes_stable_page_id(monkeypatch, tmp_path, capsys):
+    """Two runs against the same source path get the same synthesized page_id."""
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    src_md = tmp_path / "spec.md"
+    src_md.write_text(SAMPLE_MD)
+
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", FakeClient)
+
+    _run(monkeypatch, capsys, [
+        UUID_A, "--source-md", str(src_md), "--dry-run", "--run-id", "rmdA",
+    ])
+    _run(monkeypatch, capsys, [
+        UUID_A, "--source-md", str(src_md), "--dry-run", "--run-id", "rmdB",
+    ])
+    # Both runs land under the same target repo; both page.json files should
+    # carry the same synthesized page_id.
+    target = tmp_path / "siblings" / "alpha"
+    a = json.loads((target / "runs" / "work" / "rmdA" / "page.json").read_text())
+    b = json.loads((target / "runs" / "work" / "rmdB" / "page.json").read_text())
+    assert a["page_id"].startswith("md-")
+    assert a["page_id"] == b["page_id"]
+
+
+def test_run_source_md_requires_md_extension(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    src = tmp_path / "spec.txt"
+    src.write_text("not markdown")
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", FakeClient)
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "--source-md", str(src), "--dry-run", "--run-id", "rmdx",
+    ])
+    assert rc == 1
+    assert "only .md" in err
+
+
+def test_run_source_md_file_not_found(monkeypatch, tmp_path, capsys):
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", FakeClient)
+    rc, out, err = _run(monkeypatch, capsys, [
+        UUID_A, "--source-md", str(tmp_path / "missing.md"),
+        "--dry-run", "--run-id", "rmdmiss",
+    ])
+    assert rc == 1
+    assert "file not found" in err
+
+
+def test_run_source_md_mutex_with_page_id(monkeypatch, tmp_path, capsys):
+    """Passing both page_id and --source-md errors out."""
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    src = tmp_path / "spec.md"
+    src.write_text(SAMPLE_MD)
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", FakeClient)
+    import pytest
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, capsys, [
+            UUID_A, "page-A", "--source-md", str(src), "--dry-run",
+        ])
+
+
+def test_run_requires_page_id_or_source_md(monkeypatch, tmp_path, capsys):
+    """Neither page_id nor --source-md → argparse error."""
+    _setup_yaml_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(run_cli, "load_credentials", lambda: ("t", "https://h", "ws"))
+    monkeypatch.setattr(run_cli, "PlaneClient", FakeClient)
+    import pytest
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, capsys, [UUID_A, "--dry-run"])

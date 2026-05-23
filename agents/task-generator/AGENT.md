@@ -16,8 +16,30 @@ issues and posts a "Mirrored to Grava" comment back on each Plane item.
 
 - `project_id` — Plane project UUID (from `plane projects list --json` or the
   Plane URL).
-- `page_id` — Plane page UUID (from the spec page URL).
+- **One of** the following spec sources (mutually exclusive):
+  - `page_id` — Plane page UUID (from the spec page URL).
+  - `--source-md PATH` — local markdown file. The pipeline skips the Plane
+    page fetch + duplicate-page check, derives a stable synthetic spec id
+    from the file's absolute path (so re-runs of the same file are
+    idempotent), and feeds the markdown straight into the parser. Use this
+    when the spec lives on disk (e.g. an edited draft from `se generate`)
+    and you don't want to upload it to a Plane page first.
 - Optional: `target_repo` path override.
+
+### Plane work-item endpoints
+
+Epics use Plane's first-class `/projects/<pid>/epics/` endpoint
+([API reference](https://developers.plane.so/api-reference/epics/create-epic)).
+Stories and tasks use `/projects/<pid>/work-items/` with `type_id` resolved
+from the project's work-item-types. Field names differ between the two
+endpoints (epics use `parent_id` / `label_ids`; work-items use `parent` /
+`labels`); `plane_writer._dispatch` branches on `op.node_kind == "epic"` to
+pick the right call. Rollback follows the same split — epic deletes hit
+`DELETE /epics/{id}/`, everything else hits `DELETE /work-items/{id}/`.
+
+Because epics now have their own endpoint, the preflight type-map only
+requires `Story` + `Task` work-item-types. Projects without an `Epic` type
+will still preview + write cleanly.
 
 ## Three-phase workflow
 

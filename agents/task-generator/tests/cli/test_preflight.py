@@ -16,8 +16,7 @@ TYPES_OK = [
     {"id": "t-story", "name": "Story"},
     {"id": "t-task", "name": "Task"},
 ]
-TYPES_MISSING_EPIC = [
-    {"id": "t-story", "name": "Story"},
+TYPES_MISSING_STORY = [
     {"id": "t-task", "name": "Task"},
 ]
 LABELS = [{"id": "lbl-1", "name": "plane:STELLAR-1"}]
@@ -75,7 +74,11 @@ def test_preflight_writes_preflight_json(monkeypatch, tmp_path, capsys):
     ])
     assert rc == 0
     blob = json.loads((tmp_path / "preflight.json").read_text())
-    assert blob["type_uuids"]["epic"] == "t-epic"
+    # Epic uses the first-class /epics/ endpoint (no type_id needed),
+    # so the type_map only contains story + task.
+    assert blob["type_uuids"]["story"] == "t-story"
+    assert blob["type_uuids"]["task"] == "t-task"
+    assert "epic" not in blob["type_uuids"]
     assert blob["duplicates"] == []
     assert blob["duplicates_bypassed"] is False
 
@@ -107,11 +110,13 @@ def test_preflight_allow_duplicate_writes_with_flag(monkeypatch, tmp_path, capsy
 def test_preflight_missing_type_warns_but_passes(monkeypatch, tmp_path, capsys):
     """Phase 1 tolerates missing required types; emits WARNING + records in preflight.json."""
     import json
-    _setup(monkeypatch, FakeClient.factory(types=TYPES_MISSING_EPIC))
+    # Epic uses /epics/ endpoint (no type_id), so missing "Epic" type is
+    # benign. Missing "Story" still triggers the warning.
+    _setup(monkeypatch, FakeClient.factory(types=TYPES_MISSING_STORY))
     rc, out, err = _run(monkeypatch, capsys, [
         "proj", "page-A", "--work-dir", str(tmp_path),
     ])
     assert rc == 0
-    assert "WARNING" in err and "epic" in err.lower()
+    assert "WARNING" in err and "story" in err.lower()
     blob = json.loads((tmp_path / "preflight.json").read_text())
-    assert "epic" in blob["missing_types"]
+    assert "story" in blob["missing_types"]

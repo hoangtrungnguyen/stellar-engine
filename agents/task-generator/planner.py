@@ -18,7 +18,10 @@ from ir import (
     UpdateWorkItem,
 )
 
-REQUIRED_TYPES = ("epic", "story", "task")
+# Plane work-item types required as `type_id` on the /work-items/ POST.
+# "epic" intentionally absent — epics now use the first-class /epics/
+# endpoint (see plane_client.create_epic) which does not consume a type_id.
+REQUIRED_TYPES = ("story", "task")
 RELATED_SENTINEL_OPEN = "<!-- task-generator:related -->"
 RELATED_SENTINEL_CLOSE = "<!-- /task-generator:related -->"
 
