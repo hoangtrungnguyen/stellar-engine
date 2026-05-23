@@ -111,7 +111,8 @@ One agent. Orchestrator dispatches each phase. Operator approval still required 
 | `agents/generator/cli/publish.py` | Upload `drafts/*.md` to a Plane project page (per-project, not workspace wiki). |
 | `agents/generator/cli/taskify.py` | Plane page → Plane work items + blocking relations. Wraps parser/planner/plane_writer. |
 | `agents/generator/cli/mirror.py` | After taskify: Plane → grava mirror. Wraps grava_writer. |
-| `agents/generator/cli/techplan.py` | Per-epic tech-plan markdown emitter. |
+| `agents/generator/cli/techplan.py` | Per-epic tech-plan markdown emitter. Merges with existing file (preserves `## Tech notes` block byte-for-byte). |
+| `agents/generator/cli/epic_tech_plan_load.py` | Read existing per-epic tech-plan (frontmatter + tech-notes block) for the merge step. |
 | `agents/generator/plane_search.py` | Plane search wrapper (projects, pages, issues by query). Powers “search for Plane APIs” story. |
 | `agents/orchestrator/cli/generator_publish.py` | Bridge: `se o generate publish` → `generator/cli/publish.py`. |
 | `agents/orchestrator/cli/generator_taskify.py` | Bridge: `se o generate taskify` → `generator/cli/taskify.py`. Replaces `task_gen_expand.py`. |
@@ -189,15 +190,33 @@ The migrated `plane_client.py` already covers GET / POST / PATCH / DELETE for is
 
 ## 7. Tech-plan format
 
-### File location
+The system grows **two** kinds of tech-plan documents that coexist. Neither replaces the other; they answer different questions.
+
+### 7.1 System-level tech-plan (unchanged from current main)
 
 ```
-systems/<SystemName>/business/tech-plan-<epic-slug>.md
+systems/<SystemName>/tech-plan.md      ← ONE per system
 ```
 
-One file **per epic** in the system. Filename slug derived from `epic.title` (kebab-case, lowercased, ascii-only). If a previous tech-plan exists, the generator updates frontmatter in place but never overwrites the body without operator approval.
+| Property | Value |
+|---|---|
+| Schema | **Free-form markdown prose.** No frontmatter required. No fixed structure. |
+| Audience | Session-level context for the generator agent. Loaded once at the start of a run; the agent applies judgment when deciding which epics to expand and how to scope stories. |
+| Plane/grava IDs | **None.** No cross-refs. |
+| Loader | `agents/orchestrator/cli/tech_plan_load.py` (existing; unchanged). |
+| Generator behaviour | **Read-only.** Generator never writes this file; operator owns it by hand. |
 
-### Frontmatter schema
+Useful things for the operator to include: technical goals, deferred areas, architecture constraints, epic-domain notes. Not every epic needs to be listed.
+
+### 7.2 Per-epic tech-plan (new in v2)
+
+```
+systems/<SystemName>/business/tech-plan-<epic-slug>.md      ← ONE per epic
+```
+
+One file per epic in the system. Filename slug derived from `epic.title` (kebab-case, lowercased, ascii-only). Emitted + updated by the generator on the `techplan` phase. **Distinct artifact** from the system-level free-form `tech-plan.md`.
+
+#### Frontmatter schema
 
 ```yaml
 ---
@@ -205,7 +224,7 @@ generator_source: <abs path to draft markdown that produced this epic>
 generator_run_id: <RID>
 plane_project_id: <uuid>
 plane_project_code: <e.g. CAPP, STELL>
-plane_page_id: <uuid of the spec page the epic was taskified from>
+plane_page_id: <uuid of the spec page the epic was taskified from, if any>
 plane_issue_id: <uuid of the Plane work item for this epic>
 plane_issue_sequence_id: <int — Plane’s human-readable ID, e.g. 142>
 grava_issue_id: <e.g. EPIC-12>
@@ -216,7 +235,7 @@ schema_version: 1
 ---
 ```
 
-### Body structure
+#### Body structure
 
 ```markdown
 # <Epic title>
@@ -251,9 +270,48 @@ schema_version: 1
 
 The bottom `## Tech notes` section is intentionally generator-empty; engineers edit it manually. Generator updates above-`## Tech notes` content on re-run, preserves the tech-notes block byte-for-byte.
 
-### Authoring guide
+### 7.3 Load semantics — system-level vs per-epic
 
-Lives at `docs/generator/tech-plan-format.md` (created in this branch). Covers field semantics, link resolution rules, what happens on epic rename, how to query all tech-plans for a system.
+Two loaders, two call sites:
+
+| Loader | When | What it returns | Generator behaviour on miss |
+|---|---|---|---|
+| `tech_plan_load.py` (existing) | Once at the **start** of a generator run | `{system_name, tech_plan_path, exists}` JSON | Soft-fail. Run continues with no system-level context. Operator warned. |
+| `epic_tech_plan_load.py` (new in v2) | Once **per epic** during the `techplan` / `mirror` phase | `{epic_slug, tech_plan_path, exists, frontmatter, body}` JSON | Generator emits a fresh file with default body + frontmatter. |
+
+Algorithm for the new per-epic loader:
+
+```
+1. Inputs: --target-repo <path>, --system <Name>, --epic-slug <slug>
+2. Resolve stellar root via walk-up (same as tech_plan_load.py).
+3. Build path = stellar_root / "systems" / <Name> / "business" / "tech-plan-<slug>.md"
+4. If exists:
+     a. Parse YAML frontmatter.
+     b. Split body at the first `## Tech notes` heading.
+        - Above-header content = generator-managed
+        - From-header onward = engineer-owned, preserved verbatim
+     c. Return {exists: true, tech_plan_path, frontmatter, generator_body, tech_notes_block}
+5. If not:
+     a. Return {exists: false, tech_plan_path}
+6. Exit 0 either way (existence is a flag, not an error).
+```
+
+### 7.4 Write semantics — per-epic merge rules
+
+On the `techplan` phase, for each epic:
+
+1. Call `epic_tech_plan_load.py`. Get `{exists, tech_plan_path, frontmatter, tech_notes_block}`.
+2. Build new content:
+   - **Frontmatter**: merge — preserve `created_at` if existing; always rewrite `updated_at`, all `plane_*` and `grava_*` IDs (these are the authoritative source); bump `schema_version` only if generator’s schema literally changed.
+   - **Body above `## Tech notes`**: regenerate from outline + post-taskify + post-mirror state. Overwrite.
+   - **Body from `## Tech notes` onward**: copied byte-for-byte from `tech_notes_block`. If the file did not previously exist, emit `## Tech notes\n\n` as the empty header (engineer fills it later).
+3. Write atomically (tmp + rename).
+
+This is the only file the generator writes inside `systems/<N>/`. Everything else under `systems/<N>/` (including the free-form `tech-plan.md`) is operator-owned.
+
+### 7.5 Authoring guide
+
+Lives at `docs/generator/tech-plan-format.md` (created in this branch). Covers field semantics, link resolution rules, what happens on epic rename, how to query all tech-plans for a system, and explicit guidance on the system-level vs per-epic split — when to write in each.
 
 ---
 
@@ -363,7 +421,7 @@ Removed limits (were on the old generator):
 
 1. **Symlink the old `grava_plane_sync.py` path during transition?** Recommendation: no. Two-line script that errors with the new path is friendlier than a silent symlink. Confirm before H4.
 2. **Where does `se taskify` (or `se o generate taskify`) emit its preview file today?** Current task-generator writes to `runs/preview/<RID>/*.preview.md`. Keep that path or move under `drafts/<project>/runs/<RID>/`? Recommendation: keep path; just relocate code.
-3. **Per-epic tech-plan vs single-file tech-plan-index?** This plan chose per-epic per your spec. Confirm — if you want a single `tech-plan.md` per system that indexes all epics, the format changes materially.
+3. ~~**Per-epic tech-plan vs single-file tech-plan-index?**~~ **Resolved 2026-05-23:** both. System-level free-form `tech-plan.md` (existing) stays as session-context loader. New per-epic `tech-plan-<slug>.md` files added under `systems/<N>/business/`. See §7.
 4. **`schema_version` start value** — `1` chosen. Future migration story: when frontmatter shape changes, bump version + add a migration script. OK to ship at v1?
 
 ---
