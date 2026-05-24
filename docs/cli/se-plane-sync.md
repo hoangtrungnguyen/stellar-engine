@@ -153,6 +153,37 @@ se plane-sync \
 
 For the grava-side hook that runs `--direction push` after each `grava signal`, see [`docs/grava-plane-sync-setup.md`](../grava-plane-sync-setup.md). That doc covers `STELLAR_ENGINE_HOME` setup, the hook shim, and verification.
 
+## Optional: `grava_id` custom property mirror
+
+`se plane-sync --direction push` will automatically mirror each Grava issue's ID into a Plane custom property named **`grava_id`**, when one is attached to the work-item type. Setup is **opt-in** — the mirror is a no-op until the property exists in Plane.
+
+### Why
+
+Until now the grava → Plane back-link was a `plane:<seq>` label on the Grava side only. Plane had no field pointing back. With `grava_id` on the Plane side, both systems carry the cross-reference natively, enabling:
+
+- Filters/searches in Plane by Grava ID.
+- Pull-side imports (`--direction pull`) that preserve the upstream Grava ID instead of auto-generating a fresh one. Requires grava `--id` support, shipping separately.
+
+### Enable
+
+1. In the Plane web UI: **Settings → Work item types → \<type\> → Properties**.
+2. Add a property:
+   - **Name**: `grava_id` (case-insensitive; `Grava_ID`, `GRAVA_ID` also work).
+   - **Type**: **Text** (single-line).
+   - **Required**: off (mirror back-fills lazily).
+3. Repeat for every type you want mirrored (typically `Epic`, `Story`, `Task`).
+4. Next `se plane-sync … --direction push` run resolves the property UUID per type and starts upserting. Resolved UUIDs are cached in the state file (`~/.local/share/grava-plane-sync/<project_id>.json` under `grava_id_property_uuids`) so subsequent runs skip the discovery step.
+
+The mirror is **idempotent**: each issue's last-posted value is also cached (`grava_id_posted`), so a repeat sync with no change is a no-op (zero API calls per issue).
+
+### Failure semantics
+
+- Property not configured for a type → silent skip for items of that type.
+- `list_work_item_types` or `list_type_properties` fails → mirror disabled for the run; logged as warning. Next run retries.
+- `upsert_property_value` fails for a single item → logged, mirror returns to caller as non-fatal; the rest of the push continues. Cache is NOT updated for that issue, so the next run retries.
+
+This matches the broader rule for `plane-sync`: nothing in the mirror layer is allowed to fail the surrounding push.
+
 ## Implementation pointers
 
 - **Module**: [`agents/task-generator/cli/grava_plane_sync.py`](../../agents/task-generator/cli/grava_plane_sync.py)

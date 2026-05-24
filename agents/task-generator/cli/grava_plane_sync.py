@@ -117,6 +117,17 @@ class WatcherState:
     plane_state_sequences: dict[str, int] = field(default_factory=dict)
     # Grava assignee display string → Plane member UUID.
     plane_members: dict[str, str] = field(default_factory=dict)
+    # Resolved grava_id custom-property UUIDs, keyed by work-item-type UUID.
+    # Each Plane work-item type (epic, story, task, …) attaches the property
+    # independently and gets its own property UUID, so we cache one entry per
+    # type. Negative results are recorded as empty strings so we don't re-walk
+    # the API on every run. See `resolve_grava_id_property_uuids` for the
+    # auto-detection logic.
+    grava_id_property_uuids: dict[str, str] = field(default_factory=dict)
+    # Per-issue snapshot of the last grava_id value we POSTed to Plane.
+    # Lets us skip the upsert when nothing changed (idempotency without a
+    # GET round-trip). Keyed by grava issue id.
+    grava_id_posted: dict[str, str] = field(default_factory=dict)
 
 
 def load_state(path: Path) -> WatcherState:
@@ -355,6 +366,202 @@ class StateMapper:
         return None
 
 
+class GravaIDPropertyMirror:
+    """Mirror the grava issue id into Plane as a custom property.
+
+    Plane's custom-property system attaches the same property name (e.g.
+    ``grava_id``) to one or more work-item types (epic, story, task, ...).
+    Each type-binding gets its own property UUID. This class:
+
+      1. Lists work-item types + their properties exactly once per run
+         (via ``warm``), recording each type → property UUID mapping in
+         the persisted state. Negative results (property not attached to
+         a type) are stored as empty strings so we don't re-scan every
+         tick.
+      2. For each issue synced, ``mirror`` resolves the item's type
+         binding → property UUID, compares the cached last-posted value
+         (``state.grava_id_posted``) to the grava id, and POSTs an
+         upsert only when the cached value differs. POST endpoint is
+         documented as create-or-replace so we don't need a separate GET
+         to disambiguate.
+
+    The mirror is opt-in: if no Plane type has the property attached,
+    ``warm`` records empty strings everywhere and ``mirror`` is a no-op
+    (with a single info-level log line so operators know it's inactive).
+    Operators enable mirroring by creating a TEXT custom property named
+    ``grava_id`` on each work-item type they want tracked, via the Plane
+    web UI (Settings → Work item types → <type> → Properties).
+    """
+
+    PROPERTY_NAME = "grava_id"
+
+    def __init__(self, client: PlaneClient, project_id: str, state: WatcherState):
+        self._client = client
+        self._project_id = project_id
+        self._state = state
+        self._warmed = False
+        # Cached `{plane_work_item_uuid: type_uuid}` lookup so repeat
+        # mirror calls for the same issue don't re-GET the work item just
+        # to discover its type.
+        self._wi_to_type: dict[str, str] = {}
+
+    def warm(self) -> bool:
+        """Populate ``state.grava_id_property_uuids`` from Plane. Returns
+        True when at least one type has the property attached (mirror is
+        usable), False when the feature is dormant for this project.
+
+        Idempotent — the resolved cache is persisted in state, so a warmed
+        state carries forward across runs. Repeat calls re-use the cache
+        without hitting the network unless it's empty.
+        """
+        if self._warmed:
+            return any(self._state.grava_id_property_uuids.values())
+
+        # Carry forward a populated cache without API calls. We only walk
+        # the API on a cold cache; operators who want to force a refresh
+        # can delete the `grava_id_property_uuids` block from the state
+        # file.
+        if self._state.grava_id_property_uuids:
+            self._warmed = True
+            return any(self._state.grava_id_property_uuids.values())
+
+        try:
+            types = self._client.list_work_item_types(self._project_id)
+        except PlaneClientError as exc:
+            log.warning(
+                "grava_id mirror: list_work_item_types failed (%s) — mirror disabled this run",
+                exc,
+            )
+            return False
+
+        target = self.PROPERTY_NAME.lower()
+        resolved: dict[str, str] = {}
+        for t in types:
+            type_uuid = t.get("id")
+            if not type_uuid:
+                continue
+            try:
+                props = self._client.list_type_properties(self._project_id, type_uuid)
+            except PlaneClientError as exc:
+                log.warning(
+                    "grava_id mirror: list_type_properties(%s) failed: %s",
+                    type_uuid,
+                    exc,
+                )
+                # Treat as "unknown" — leave out of cache so we retry next run.
+                continue
+            prop_uuid = ""
+            for p in props:
+                name = (p.get("name") or "").strip().lower()
+                display = (p.get("display_name") or "").strip().lower()
+                if target in (name, display):
+                    prop_uuid = p.get("id") or ""
+                    break
+            resolved[type_uuid] = prop_uuid
+
+        self._state.grava_id_property_uuids = resolved
+        self._warmed = True
+        usable = any(resolved.values())
+        if not usable:
+            log.info(
+                "grava_id mirror: no Plane work-item type in project %s has a "
+                "'%s' custom property — mirror is a no-op. Create the property "
+                "in Plane (Settings → Work item types → <type> → Properties) "
+                "to enable.",
+                self._project_id,
+                self.PROPERTY_NAME,
+            )
+        else:
+            log.info(
+                "grava_id mirror: resolved %d/%d type bindings (%s)",
+                sum(1 for v in resolved.values() if v),
+                len(resolved),
+                self.PROPERTY_NAME,
+            )
+        return usable
+
+    def _lookup_type(self, plane_uuid: str) -> str | None:
+        """Return the work-item-type UUID for a Plane item, GETting it once
+        and caching for the remainder of the run.
+        """
+        if plane_uuid in self._wi_to_type:
+            return self._wi_to_type[plane_uuid] or None
+        try:
+            wi = self._client.get_work_item(self._project_id, plane_uuid)
+        except PlaneClientError as exc:
+            log.warning(
+                "grava_id mirror: get_work_item(%s) failed: %s — skip mirror",
+                plane_uuid,
+                exc,
+            )
+            return None
+        type_uuid = wi.get("type") or wi.get("work_item_type") or ""
+        # Normalise to string — Plane sometimes returns a dict here.
+        if isinstance(type_uuid, dict):
+            type_uuid = type_uuid.get("id", "")
+        type_uuid = str(type_uuid or "")
+        self._wi_to_type[plane_uuid] = type_uuid
+        return type_uuid or None
+
+    def mirror(self, plane_uuid: str, grava_id: str) -> bool:
+        """Push ``grava_id`` to the Plane work item's custom property.
+
+        Returns True on success or no-op, False on hard failure (the caller
+        treats False as a non-fatal warning — Plane sync never blocks the
+        Grava pipeline on property mirror).
+        """
+        if not self.warm():
+            return True  # mirror dormant for this project; treat as success
+        if not plane_uuid or not grava_id:
+            return True
+        cached = self._state.grava_id_posted.get(grava_id)
+        if cached == grava_id:
+            # Already posted this value — nothing to do.
+            return True
+
+        type_uuid = self._lookup_type(plane_uuid)
+        if not type_uuid:
+            return False
+        prop_uuid = self._state.grava_id_property_uuids.get(type_uuid, "")
+        if not prop_uuid:
+            # Property not attached to this type — silently skip.
+            log.debug(
+                "grava_id mirror: type %s has no '%s' property; skip plane=%s grava=%s",
+                type_uuid,
+                self.PROPERTY_NAME,
+                plane_uuid,
+                grava_id,
+            )
+            return True
+
+        try:
+            self._client.upsert_property_value(
+                self._project_id,
+                plane_uuid,
+                prop_uuid,
+                grava_id,
+                external_id=grava_id,
+                external_source="grava",
+            )
+        except PlaneClientError as exc:
+            log.warning(
+                "grava_id mirror: upsert failed for plane=%s grava=%s: %s",
+                plane_uuid,
+                grava_id,
+                exc,
+            )
+            return False
+
+        self._state.grava_id_posted[grava_id] = grava_id
+        log.info(
+            "grava_id mirror: plane=%s ← grava=%s (prop=%s)",
+            plane_uuid,
+            grava_id,
+            prop_uuid,
+        )
+        return True
+
+
 class MemberMapper:
     def __init__(self, client: PlaneClient, state: WatcherState):
         self._client = client
@@ -576,6 +783,7 @@ def sync_issue(
     state: WatcherState,
     row: dict,
     is_first_seen: bool,
+    grava_id_mirror: "GravaIDPropertyMirror | None" = None,
 ) -> None:
     """Sync status/assignee + new comments for one issue."""
     grava_id = row["id"]
@@ -587,6 +795,13 @@ def sync_issue(
     plane_uuid = state.seq_to_plane_uuid.get(seq_id)
     if not plane_uuid:
         return
+
+    # Best-effort: push the grava id into Plane's custom property if one is
+    # configured. Failures are non-fatal — `mirror` swallows API errors and
+    # returns False; we surface them only as warnings so they never block
+    # the surrounding sync.
+    if grava_id_mirror is not None:
+        grava_id_mirror.mirror(plane_uuid, grava_id)
 
     # First-time-seen issue: skip historical comments — set cursor to current max.
     if is_first_seen and grava_id not in state.last_comment_id_by_issue:
@@ -1030,13 +1245,20 @@ def main(argv: list[str] | None = None) -> int:
     state_mapper.warm()
     member_mapper.warm()
 
+    # Best-effort custom-property mirror. `warm` populates the cache in
+    # `state.grava_id_property_uuids` (or records the no-op state) so it's
+    # cheap on subsequent calls. The mirror itself is wired into sync_issue
+    # below and silently no-ops when the property isn't configured in Plane.
+    grava_id_mirror = GravaIDPropertyMirror(client, project_id, state)
+    grava_id_mirror.warm()
+
     syncer = PlaneSyncer(client, project_id, state, state_mapper, member_mapper)
 
     for row in rows:
         grava_id = row["id"]
         is_first_seen = grava_id not in state.issues
         try:
-            sync_issue(db, syncer, state, row, is_first_seen)
+            sync_issue(db, syncer, state, row, is_first_seen, grava_id_mirror)
         except Exception as exc:  # noqa: BLE001
             log.warning("sync_issue(%s) failed: %s", grava_id, exc)
             plane_failure_detail.append(f"{grava_id}: {exc}")

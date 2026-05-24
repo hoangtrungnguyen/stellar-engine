@@ -277,6 +277,110 @@ class PlaneClient:
             return data
         return data.get("results", [])
 
+    # ── Issue-type custom properties ─────────────────
+    # Plane's work-item-type system exposes per-type custom properties
+    # (TEXT, NUMBER, BOOLEAN, DATE, DROPDOWN, MEMBER_PICKER, RELEASE_PICKER,
+    # URL). Used by stellar-engine for the `grava_id` property that mirrors
+    # a grava issue id onto its Plane counterpart. Docs:
+    # https://developers.plane.so/api-reference/issue-types/properties/list-properties
+    # https://developers.plane.so/api-reference/issue-types/values/get-property-value-detail
+
+    def list_type_properties(self, project_id: str, type_id: str) -> list[dict]:
+        """GET /projects/{p}/work-item-types/{type_id}/work-item-properties/
+
+        Returns the property definitions attached to one work-item type
+        (epic, story, task, …). Each row carries ``{id, name, display_name,
+        property_type, is_required, sort_order, ...}``. The same property
+        name can be attached to multiple types — each binding has its own
+        UUID, so callers that need a project-wide map should list per type
+        and merge.
+        """
+        data = self._request(
+            "GET", f"projects/{project_id}/work-item-types/{type_id}/work-item-properties/"
+        )
+        if isinstance(data, list):
+            return data
+        return data.get("results", [])
+
+    def get_property_value(
+        self, project_id: str, work_item_id: str, property_id: str
+    ) -> dict | list:
+        """GET /projects/{p}/work-items/{wi}/work-item-properties/{prop}/values/
+
+        For single-value property types (TEXT, NUMBER, BOOLEAN, DATE, URL,
+        single-select DROPDOWN/MEMBER_PICKER/RELEASE_PICKER) the API returns
+        a single object. For multi-select properties it returns a list.
+        Empty / unset properties return either ``{}`` or ``[]`` depending on
+        the property kind. Callers handle both.
+        """
+        return self._request(
+            "GET",
+            f"projects/{project_id}/work-items/{work_item_id}/"
+            f"work-item-properties/{property_id}/values/",
+        )
+
+    def upsert_property_value(
+        self,
+        project_id: str,
+        work_item_id: str,
+        property_id: str,
+        value,
+        *,
+        external_id: str | None = None,
+        external_source: str | None = None,
+    ) -> dict:
+        """POST /projects/{p}/work-items/{wi}/work-item-properties/{prop}/values/
+
+        Documented as upsert — one value per (work_item, property) pair,
+        creating or replacing. ``value`` type depends on the property:
+        ``str`` for TEXT/URL, ``str`` (UUID) or list of UUIDs for
+        DROPDOWN/MEMBER_PICKER (list only when ``is_multi=True``), ``str``
+        (YYYY-MM-DD) for DATE, ``int``/``float`` for NUMBER, ``bool`` for
+        BOOLEAN. Optional ``external_id`` / ``external_source`` are
+        forwarded for integration tracking (we use ``"grava"`` as source on
+        the push leg).
+        """
+        payload: dict = {"value": value}
+        if external_id is not None:
+            payload["external_id"] = external_id
+        if external_source is not None:
+            payload["external_source"] = external_source
+        return self._request(
+            "POST",
+            f"projects/{project_id}/work-items/{work_item_id}/"
+            f"work-item-properties/{property_id}/values/",
+            json=payload,
+        )
+
+    def update_property_value(
+        self,
+        project_id: str,
+        work_item_id: str,
+        property_id: str,
+        value,
+        *,
+        external_id: str | None = None,
+        external_source: str | None = None,
+    ) -> dict:
+        """PATCH /projects/{p}/work-items/{wi}/work-item-properties/{prop}/values/
+
+        Partial update of an existing property value. ``upsert_property_value``
+        is usually the right call — the POST endpoint already creates-or-replaces.
+        PATCH is kept for callers that want explicit-update semantics with
+        the same error surface (e.g. fail loudly on missing target).
+        """
+        payload: dict = {"value": value}
+        if external_id is not None:
+            payload["external_id"] = external_id
+        if external_source is not None:
+            payload["external_source"] = external_source
+        return self._request(
+            "PATCH",
+            f"projects/{project_id}/work-items/{work_item_id}/"
+            f"work-item-properties/{property_id}/values/",
+            json=payload,
+        )
+
     # ── Members ──────────────────────────────────────
     def list_members(self) -> list[dict]:
         """GET /workspaces/{ws}/members/

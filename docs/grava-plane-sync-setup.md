@@ -112,6 +112,30 @@ Independent of `STELLAR_ENGINE_HOME`. The sync script reads (in order):
 
 If neither is present, the script silently no-ops (`exit 0`) — agent pipeline is unaffected. You can configure Plane later without touching agent code.
 
+## Optional: `grava_id` custom property mirror
+
+Push runs additionally upsert each Grava issue's ID into a Plane custom property called **`grava_id`** — when the property exists in Plane. Setup is opt-in; until you create the property, the mirror is a no-op.
+
+Why bother: the back-link `plane:<seq>` label sits on the Grava side only. `grava_id` puts the reverse pointer on Plane natively, so Plane searches/filters can find issues by their Grava ID and a future pull-side import can preserve the upstream ID end-to-end.
+
+**Enable**:
+
+1. Plane web UI → **Settings → Work item types → \<type\> → Properties**.
+2. Add a property of type **Text** named `grava_id`.
+3. Repeat for each type you want mirrored (`Epic` / `Story` / `Task` are typical).
+
+Next push run auto-discovers the property UUID per type, caches it in `~/.local/share/grava-plane-sync/<project_id>.json` under `grava_id_property_uuids`, and starts upserting. Each issue's last-posted value is also cached (`grava_id_posted`) so repeats are zero-cost no-ops.
+
+Failure modes (all non-fatal — never block the push):
+
+| Symptom | Cause | Outcome |
+|---|---|---|
+| Mirror silent | Property not configured in Plane | No-op; single info log per run |
+| Type listing fails | Transient Plane 5xx | Mirror disabled for this run; logged; retries next run |
+| Upsert fails for one issue | Item-specific 4xx/5xx | Logged; cache NOT updated; retries next run |
+
+Full reference: [`docs/cli/se-plane-sync.md`](cli/se-plane-sync.md#optional-grava_id-custom-property-mirror).
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
