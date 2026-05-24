@@ -11,6 +11,7 @@ import pytest
 import grava_plane_sync as sync_mod
 from grava_plane_sync import (
     GravaDB,
+    GravaIDPropertyMirror,
     MemberMapper,
     PlaneSyncer,
     StateMapper,
@@ -20,6 +21,7 @@ from grava_plane_sync import (
     main,
     save_state,
 )
+from plane_client import PlaneClientError
 
 
 # ─── FakePlaneClient ─────────────────────────────────────────────────────────
@@ -33,13 +35,32 @@ class FakePlaneClient:
         members=None,
         work_items=None,
         get_responses=None,
+        work_item_types=None,
+        type_properties=None,
+        property_values=None,
     ):
         self._states = states or []
         self._members = members or []
         self._work_items = work_items or []
         self._get_responses = get_responses or {}
+        # New optional fixtures for the grava_id custom-property mirror.
+        # `work_item_types`: list of {id, name} dicts returned by
+        # list_work_item_types. `type_properties`: {type_uuid: [property_dict, …]}
+        # returned by list_type_properties(type_uuid). `property_values`:
+        # {(work_item_uuid, property_uuid): value} echoed back from
+        # upsert_property_value for fixture assertions.
+        self._work_item_types = work_item_types or []
+        self._type_properties = type_properties or {}
+        self._property_values = property_values or {}
+        # Recorders so tests can assert on what was sent.
         self.patches: list[tuple[str, str, dict]] = []
         self.comments: list[tuple[str, str, str]] = []
+        self.property_upserts: list[tuple[str, str, str, object, dict]] = []
+        # Defaults to None — set to a PlaneClientError to simulate failures.
+        self.list_work_item_types_error = None
+        self.list_type_properties_error = None
+        self.upsert_property_value_error = None
+        self.get_work_item_error = None
 
     def list_states(self, project_id):
         return self._states
@@ -58,6 +79,8 @@ class FakePlaneClient:
         return self._work_items
 
     def get_work_item(self, project_id, issue_id):
+        if self.get_work_item_error is not None:
+            raise self.get_work_item_error
         return self._get_responses.get(issue_id, {"id": issue_id})
 
     def update_work_item(self, project_id, issue_id, payload):
@@ -67,6 +90,33 @@ class FakePlaneClient:
     def add_comment(self, project_id, issue_id, comment_html):
         self.comments.append((project_id, issue_id, comment_html))
         return {"id": "c-1"}
+
+    # ── grava_id mirror helpers ──────────────────────────
+    def list_work_item_types(self, project_id):
+        if self.list_work_item_types_error is not None:
+            raise self.list_work_item_types_error
+        return self._work_item_types
+
+    def list_type_properties(self, project_id, type_id):
+        if self.list_type_properties_error is not None:
+            raise self.list_type_properties_error
+        return self._type_properties.get(type_id, [])
+
+    def upsert_property_value(
+        self, project_id, work_item_id, property_id, value, **kwargs
+    ):
+        if self.upsert_property_value_error is not None:
+            raise self.upsert_property_value_error
+        self.property_upserts.append(
+            (project_id, work_item_id, property_id, value, dict(kwargs))
+        )
+        self._property_values[(work_item_id, property_id)] = value
+        return {
+            "id": "prop-val-1",
+            "property_id": property_id,
+            "issue_id": work_item_id,
+            "value": value,
+        }
 
 
 # ─── WatcherState round-trip ─────────────────────────────────────────────────
@@ -663,3 +713,235 @@ def test_main_direction_push_skips_pull(tmp_path, monkeypatch):
     ])
     assert rc == 0
     assert pull_called["n"] == 0
+
+
+# ─── GravaIDPropertyMirror ───────────────────────────────────────────────────
+
+
+def test_grava_id_mirror_warm_resolves_property_uuids_per_type():
+    """warm() lists work-item types + their properties and caches the
+    grava_id property UUID per type. Empty bindings are recorded as ""
+    so subsequent runs skip the API entirely."""
+    state = WatcherState()
+    client = FakePlaneClient(
+        work_item_types=[
+            {"id": "type-epic", "name": "Epic"},
+            {"id": "type-story", "name": "Story"},
+            {"id": "type-task", "name": "Task"},
+        ],
+        type_properties={
+            "type-epic": [
+                {"id": "prop-1", "name": "grava_id", "property_type": "TEXT"},
+                {"id": "prop-other", "name": "story_points", "property_type": "NUMBER"},
+            ],
+            "type-story": [
+                {"id": "prop-2", "display_name": "Grava_ID", "property_type": "TEXT"},
+            ],
+            "type-task": [
+                # No grava_id binding here.
+                {"id": "prop-3", "name": "blocked_by_team", "property_type": "TEXT"},
+            ],
+        },
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.warm() is True
+    assert state.grava_id_property_uuids == {
+        "type-epic": "prop-1",
+        "type-story": "prop-2",
+        "type-task": "",
+    }
+
+
+def test_grava_id_mirror_warm_reuses_cached_state():
+    """A pre-populated cache short-circuits warm() — no API calls."""
+    state = WatcherState(grava_id_property_uuids={"type-epic": "prop-x"})
+    client = FakePlaneClient()
+    # Sanity: if warm() called the API it would NPE on the empty fixture lists,
+    # so reaching here proves the short-circuit.
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.warm() is True
+    assert state.grava_id_property_uuids == {"type-epic": "prop-x"}
+
+
+def test_grava_id_mirror_warm_no_property_anywhere_is_dormant():
+    """When no type has the property attached, warm() returns False
+    and mirror() becomes a no-op."""
+    state = WatcherState()
+    client = FakePlaneClient(
+        work_item_types=[{"id": "type-task", "name": "Task"}],
+        type_properties={"type-task": [
+            {"id": "prop-x", "name": "story_points", "property_type": "NUMBER"},
+        ]},
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.warm() is False
+    # Cache populated with empty strings — won't re-walk API next run.
+    assert state.grava_id_property_uuids == {"type-task": ""}
+
+
+def test_grava_id_mirror_warm_list_types_error_disables_mirror():
+    """A PlaneClientError from list_work_item_types is caught — mirror
+    returns False so subsequent mirror() calls no-op gracefully."""
+    state = WatcherState()
+    client = FakePlaneClient()
+    client.list_work_item_types_error = PlaneClientError(
+        500, "boom", "http://x"
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.warm() is False
+    # Cache untouched so next run retries.
+    assert state.grava_id_property_uuids == {}
+
+
+def test_grava_id_mirror_mirror_upserts_on_new_grava_id(monkeypatch):
+    """Happy path: type binding found → upsert called with the grava id
+    and external_id/external_source provenance fields."""
+    state = WatcherState(grava_id_property_uuids={"type-task": "prop-task"})
+    client = FakePlaneClient(
+        # work_item_types unused since cache is pre-warmed; get_responses
+        # supplies the type lookup for _lookup_type.
+        get_responses={"plane-uuid-1": {"id": "plane-uuid-1", "type": "type-task"}},
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.mirror("plane-uuid-1", "grava-a1b2") is True
+    assert len(client.property_upserts) == 1
+    project_id, wi, prop, value, kwargs = client.property_upserts[0]
+    assert (project_id, wi, prop, value) == ("proj-1", "plane-uuid-1", "prop-task", "grava-a1b2")
+    assert kwargs == {"external_id": "grava-a1b2", "external_source": "grava"}
+    assert state.grava_id_posted == {"grava-a1b2": "grava-a1b2"}
+
+
+def test_grava_id_mirror_mirror_skips_when_value_unchanged():
+    """Second mirror() call with the same grava id is a no-op — no GET,
+    no POST. Proves the `grava_id_posted` short-circuit fires."""
+    state = WatcherState(
+        grava_id_property_uuids={"type-task": "prop-task"},
+        grava_id_posted={"grava-a1b2": "grava-a1b2"},
+    )
+    client = FakePlaneClient()
+    # If the short-circuit fails the test will explode on the missing
+    # get_responses entry (KeyError surfaced as None type → upsert tries
+    # empty prop UUID → still no-op, but property_upserts would record
+    # nothing anyway — so the only solid signal is "no GETs happened").
+    client.get_work_item_error = PlaneClientError(500, "should not GET", "x")
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.mirror("plane-uuid-1", "grava-a1b2") is True
+    assert client.property_upserts == []
+
+
+def test_grava_id_mirror_mirror_skips_when_type_has_no_property():
+    """Item's work-item-type doesn't have grava_id attached → silent skip,
+    no upsert. Returns True so the caller doesn't treat it as an error."""
+    state = WatcherState(
+        # Mixed cache: epic has it, task does not.
+        grava_id_property_uuids={"type-epic": "prop-epic", "type-task": ""},
+    )
+    client = FakePlaneClient(
+        get_responses={"plane-uuid-task": {"id": "plane-uuid-task", "type": "type-task"}},
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.mirror("plane-uuid-task", "grava-a1b2") is True
+    assert client.property_upserts == []
+    # Not recorded as posted since we didn't actually push it.
+    assert "grava-a1b2" not in state.grava_id_posted
+
+
+def test_grava_id_mirror_mirror_upsert_failure_returns_false():
+    """A PlaneClientError from upsert_property_value is caught — mirror
+    returns False (caller logs as non-fatal) and state.grava_id_posted is
+    NOT updated so the next run retries."""
+    state = WatcherState(grava_id_property_uuids={"type-task": "prop-task"})
+    client = FakePlaneClient(
+        get_responses={"plane-uuid-1": {"id": "plane-uuid-1", "type": "type-task"}},
+    )
+    client.upsert_property_value_error = PlaneClientError(
+        503, "service unavailable", "http://x"
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.mirror("plane-uuid-1", "grava-a1b2") is False
+    assert state.grava_id_posted == {}
+
+
+def test_grava_id_mirror_mirror_handles_type_as_dict():
+    """Plane sometimes returns `type` as a {id, name} dict instead of a
+    bare UUID — _lookup_type normalises both shapes."""
+    state = WatcherState(grava_id_property_uuids={"type-epic": "prop-epic"})
+    client = FakePlaneClient(
+        get_responses={"plane-uuid-1": {
+            "id": "plane-uuid-1",
+            "type": {"id": "type-epic", "name": "Epic"},
+        }},
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    assert mirror.mirror("plane-uuid-1", "grava-c0de") is True
+    assert len(client.property_upserts) == 1
+    assert client.property_upserts[0][2] == "prop-epic"
+
+
+def test_grava_id_mirror_mirror_caches_type_lookup():
+    """_lookup_type GETs the work item once per run, then serves from
+    the local cache for subsequent mirror() calls on the same plane uuid."""
+    state = WatcherState(grava_id_property_uuids={"type-task": "prop-task"})
+    get_count = {"n": 0}
+
+    class Counting(FakePlaneClient):
+        def get_work_item(self, project_id, issue_id):
+            get_count["n"] += 1
+            return super().get_work_item(project_id, issue_id)
+
+    client = Counting(
+        get_responses={"plane-uuid-1": {"id": "plane-uuid-1", "type": "type-task"}},
+    )
+    mirror = GravaIDPropertyMirror(client, "proj-1", state)
+    # Two distinct grava ids on the SAME plane work item — second call
+    # should reuse the cached type and skip the second GET.
+    assert mirror.mirror("plane-uuid-1", "grava-a1b2") is True
+    assert mirror.mirror("plane-uuid-1", "grava-c0de") is True
+    assert get_count["n"] == 1, "type lookup should only GET once per plane uuid"
+    assert len(client.property_upserts) == 2
+
+
+def test_main_invokes_grava_id_mirror_after_sync(monkeypatch, tmp_path):
+    """End-to-end via main(): a single-issue push run sees the mirror
+    fire once and records the resolved property UUID in the persisted
+    state file."""
+    (tmp_path / ".grava" / "dolt").mkdir(parents=True)
+    state_file = tmp_path / "state.json"
+
+    monkeypatch.setattr(sync_mod, "plane_configured", lambda: True)
+    monkeypatch.setattr(sync_mod, "internet_ok", lambda **_: True)
+    monkeypatch.setattr(sync_mod, "load_credentials", lambda: ("tok", "h", "ws"))
+    fake_client = FakePlaneClient(
+        states=[{"id": "s1", "name": "Todo", "group": "unstarted", "sequence": 1}],
+        work_items=[{"id": "u1", "sequence_id": 10}],
+        get_responses={"u1": {"id": "u1", "state": "s1", "assignees": [], "type": "type-task"}},
+        work_item_types=[{"id": "type-task", "name": "Task"}],
+        type_properties={"type-task": [
+            {"id": "prop-task", "name": "grava_id", "property_type": "TEXT"},
+        ]},
+    )
+    monkeypatch.setattr(sync_mod, "PlaneClient", lambda **kw: fake_client)
+
+    monkeypatch.setattr(GravaDB, "fetch_issue", lambda self, iid: {
+        "id": "grava-a1b2", "status": "open", "assignee": None, "seq_id": "10",
+    })
+    monkeypatch.setattr(GravaDB, "fetch_max_comment_id", lambda self, iid: 0)
+    monkeypatch.setattr(GravaDB, "fetch_new_comments", lambda self, iid, since_id: [])
+
+    rc = main([
+        "grava-a1b2",
+        "--project-id", "proj-1",
+        "--grava-repo", str(tmp_path),
+        "--state-file", str(state_file),
+    ])
+    assert rc == 0
+    # Mirror fired exactly once with the right (work-item, property, value)
+    # triple and provenance metadata.
+    assert len(fake_client.property_upserts) == 1
+    project_id, wi, prop, value, kwargs = fake_client.property_upserts[0]
+    assert (project_id, wi, prop, value) == ("proj-1", "u1", "prop-task", "grava-a1b2")
+    assert kwargs == {"external_id": "grava-a1b2", "external_source": "grava"}
+    # Persisted state reflects the cache so a subsequent run skips warm().
+    state = load_state(state_file)
+    assert state.grava_id_property_uuids == {"type-task": "prop-task"}
+    assert state.grava_id_posted == {"grava-a1b2": "grava-a1b2"}
