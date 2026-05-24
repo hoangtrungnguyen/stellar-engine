@@ -361,7 +361,10 @@ def _dispatch_create_or_update(
             f"Op {idx} ({op.ref_key}): missing Plane sequence_id or uuid in state."
         )
 
-    wi = client.get_work_item(project_id, plane_uuid)
+    if op.node_kind == "epic":
+        wi = client.get_epic(project_id, plane_uuid)
+    else:
+        wi = client.get_work_item(project_id, plane_uuid)
     title = wi.get("name") or op.title
     desc_body = _strip_html(wi.get("description_html") or op.description_html)
     priority = _map_priority(wi.get("priority"))

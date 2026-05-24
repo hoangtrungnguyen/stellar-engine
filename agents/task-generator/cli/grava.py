@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import grava_writer  # noqa: E402
 from ir import (  # noqa: E402
+    DesignLink,
     EpicNode,
     GravaState,
     ParseWarning,
@@ -40,6 +41,11 @@ def _ir_from_dict(d: dict) -> EpicNode:
             description_md=s.get("description_md", ""),
             type_marker=s.get("type_marker"),
             related_refs=list(s.get("related_refs", [])),
+            acceptance_criteria=list(s.get("acceptance_criteria", [])),
+            design_links=[
+                DesignLink(url=dl.get("url", ""), label=dl.get("label"))
+                for dl in s.get("design_links", [])
+            ],
         )
         for t in s.get("tasks", []):
             story.tasks.append(TaskNode(
