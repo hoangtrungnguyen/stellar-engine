@@ -195,6 +195,9 @@ class PlaneClient:
             json=payload,
         )
 
+    def get_epic(self, project_id: str, epic_id: str) -> dict:
+        return self._request("GET", f"projects/{project_id}/epics/{epic_id}/")
+
     def update_epic(self, project_id: str, epic_id: str, payload: dict) -> dict:
         return self._request(
             "PATCH",
